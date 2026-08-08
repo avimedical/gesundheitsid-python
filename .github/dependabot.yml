@@ -1,0 +1,16 @@
+version: 2
+updates:
+  # Actions pinned by commit SHA in .github/workflows/*.yaml still need a way to move
+  # forward; Dependabot opens the PR that bumps the SHA and the trailing version comment.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+
+  # This project depends on uv.lock, not requirements.txt, so the ecosystem is "uv"
+  # (Dependabot's native uv support) rather than "pip" -- "uv" is what reads pyproject.toml
+  # and uv.lock directly and understands dependency-groups.
+  - package-ecosystem: "uv"
+    directory: "/"
+    schedule:
+      interval: "weekly"

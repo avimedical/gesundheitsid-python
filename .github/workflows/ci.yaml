@@ -1,0 +1,181 @@
+name: CI
+
+# `workflow_call` is included alongside the normal triggers so release.yaml can invoke
+# this entire file as one reusable workflow and gate publishing on it, instead of
+# duplicating its steps or relying on a branch-protection rule that lives outside this
+# repo's version control.
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_call:
+
+# Minimal by default. Jobs that need more (checks:write for the test reporter) grant it
+# on that job specifically, following the same "narrow, never widen" rule reusable
+# workflows are bound by: this block is also the ceiling release.yaml's `ci` job passes
+# down when it calls this file.
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      checks: write
+    strategy:
+      fail-fast: false
+      matrix:
+        # requires-python in pyproject.toml is ">=3.14". 3.15 is not added yet: as of
+        # writing, 3.15.0-rc.1 is the newest actions/python-versions entry and is a
+        # release candidate, not a stable release setup-uv can install. Add "3.15" here
+        # once a stable 3.15.x release exists.
+        python-version:
+          - "3.14"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Ruff check
+        run: uv run ruff check .
+
+      - name: Ruff format check
+        run: uv run ruff format --check .
+
+      - name: License gate (no GPL/AGPL)
+        run: uv run pip-licenses --fail-on="GPL.*;AGPL.*"
+
+      - name: Run tests
+        run: uv run pytest -q --junitxml=test-results.xml
+
+      - name: Upload test results
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: test-results-${{ matrix.python-version }}
+          path: test-results.xml
+
+      # Surfaces individual failures on the PR instead of only a red job. On PRs from
+      # forks GITHUB_TOKEN is read-only regardless of the permissions block above, so
+      # this step degrades to a no-op there rather than failing the job.
+      - name: Publish test results
+        uses: dorny/test-reporter@a43b3a5f7366b97d083190328d2c652e1a8b6aa2 # v3.0.0
+        if: always()
+        with:
+          name: Test Results (Python ${{ matrix.python-version }})
+          path: test-results.xml
+          reporter: java-junit
+
+  build:
+    name: Build distributions
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          python-version: "3.14"
+
+      - name: Build both packages
+        run: uv build
+
+      # Today this repo publishes ONE distribution, `gesundheitsid`, whose wheel contains
+      # both the `gesundheitsid` and `gesundheitsid_cli` import packages (see
+      # [tool.hatch.build.targets.wheel] in pyproject.toml). Asserting the wheel actually
+      # carries both is the regression that matters: a hatch misconfiguration silently
+      # dropping one of them would otherwise only surface after publishing, and a bad
+      # PyPI release cannot be overwritten.
+      #
+      # When the planned split into separate `gesundheitsid` / `django-gesundheitsid` /
+      # `gesundheitsid-cli` distributions lands, change this to assert one wheel per
+      # distribution instead.
+      - name: Verify the wheel contains both packages
+        run: |
+          set -euo pipefail
+          echo "contents of dist/:"
+          ls -1 dist/
+          wheel_count=$(find dist -maxdepth 1 -name '*.whl' | wc -l | tr -d ' ')
+          if [ "$wheel_count" -ne 1 ]; then
+            echo "::error::expected exactly 1 wheel in dist/, found ${wheel_count}"
+            exit 1
+          fi
+          wheel=$(find dist -maxdepth 1 -name '*.whl')
+          for pkg in gesundheitsid gesundheitsid_cli; do
+            if ! unzip -l "$wheel" | grep -q "  ${pkg}/"; then
+              echo "::error::wheel ${wheel} does not contain the ${pkg} package"
+              exit 1
+            fi
+          done
+
+  oss-hygiene:
+    name: OSS hygiene gate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # This repo is public. The risk this step guards against is NOT the words
+      # "avimedical" or "kvnr" appearing in the tree: "avimedical" legitimately appears
+      # in the GitHub URL, the NOTICE copyright line and README.md, and "kvnr" is
+      # GesundheitsID's own claim field name, used throughout gesundheitsid/crypto and
+      # gesundheitsid/federation on purpose. A literal grep for either word would be
+      # nothing but false positives and would train reviewers to ignore this job.
+      #
+      # What would actually indicate an internal leak is much narrower, so that is what
+      # each check below targets specifically:
+      #   1. PEM-encoded private key material.
+      #   2. A JWK's private "d" member (RFC 7518 6.2.2.1) -- the key itself, not the
+      #      public parts.
+      #   3. An internal *.avimedical.priv hostname (combines the "avimedical" and
+      #      ".priv" fragments from the original ask into the one shape that is
+      #      actually suspicious).
+      #   4. A Vault secret-engine path, which would reveal internal infra layout.
+      #
+      # Only tracked files are scanned (git ls-files), so .venv/, __pycache__/ and other
+      # gitignored local build output can never trip this gate.
+      - name: Scan tracked files for internal/secret material
+        run: |
+          set -uo pipefail
+          failed=0
+
+          check() {
+            description="$1"
+            pattern="$2"
+            if git ls-files -z | xargs -0 grep -nIE -- "$pattern" 2>/dev/null; then
+              echo "::error::${description}"
+              failed=1
+            fi
+          }
+
+          check "found PEM private-key material in a tracked file" \
+            -- '-----BEGIN (RSA |EC |ENCRYPTED )?PRIVATE KEY-----'
+
+          check "found what looks like a JWK private 'd' parameter in a tracked file" \
+            -- '"d"[[:space:]]*:[[:space:]]*"[A-Za-z0-9_-]{20,}"'
+
+          check "found an internal *.avimedical.priv hostname in a tracked file" \
+            -- '[A-Za-z0-9.-]*\.avimedical\.priv'
+
+          check "found what looks like a Vault secret-engine path in a tracked file" \
+            -- '(vault://|secret/data/avimedical|secret/avimedical/)'
+
+          if [ "$failed" -ne 0 ]; then
+            echo "One or more OSS hygiene checks failed above -- see the comment on this step for what each pattern guards against."
+            exit 1
+          fi

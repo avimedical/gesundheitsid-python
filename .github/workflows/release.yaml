@@ -1,0 +1,60 @@
+name: Release
+
+# Fires when a GitHub Release is published (i.e. a maintainer promotes a draft/tag to a
+# real release), not on every push or tag creation -- publishing to PyPI should be a
+# deliberate act, not something a stray `git tag && git push --tags` triggers.
+on:
+  release:
+    types: [published]
+
+# Minimal by default; the `publish` job below grants itself id-token: write on top of
+# this, since that is only needed for the one job that actually talks to PyPI.
+permissions:
+  contents: read
+
+jobs:
+  # Gate the publish on the exact same test/build/OSS-hygiene gate every push and PR
+  # already has to pass -- a GitHub Release being cut is not a reason to skip it.
+  ci:
+    permissions:
+      contents: read
+      checks: write
+    uses: ./.github/workflows/ci.yaml
+
+  publish:
+    name: Publish to PyPI
+    needs: ci
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/gesundheitsid/
+    # id-token: write is the whole trick: it lets pypa/gh-action-pypi-publish request a
+    # short-lived OIDC token from GitHub and exchange it with PyPI for upload credentials.
+    # No PYPI_API_TOKEN secret exists anywhere in this repo, and none should be added --
+    # trusted publishing replaces it entirely.
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          python-version: "3.14"
+
+      - name: Build both packages
+        run: uv build
+
+      # NOTE for the first release: trusted publishing must be configured on the PyPI
+      # side *before* this step will succeed. For each of the two projects (gesundheitsid
+      # and gesundheitsid_cli), go to the project's PyPI page -> Publishing -> Add a new
+      # publisher, and register: owner "avimedical", repository "gesundheitsid-python",
+      # workflow name "release.yaml", environment "pypi". If the project does not exist
+      # on PyPI yet, PyPI also supports "pending publisher" registration ahead of the
+      # first upload -- create that instead of minting an API token as a workaround.
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+        with:
+          packages-dir: dist/
