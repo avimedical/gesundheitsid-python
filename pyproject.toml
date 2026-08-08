@@ -20,6 +20,16 @@ dependencies = [
     "joserfc>=1.5.0",
 ]
 
+# Kept separate from `dependencies` on purpose: the core `gesundheitsid` package must stay
+# usable by anything, not just Django services, so Django/Authlib/django-redis are only
+# ever pulled in by callers who explicitly opt into the `django` extra.
+[project.optional-dependencies]
+django = [
+    "django>=5.2",
+    "authlib>=1.7",
+    "django-redis>=6.0",
+]
+
 [project.scripts]
 gesundheitsid-cli = "gesundheitsid_cli.__main__:main"
 
@@ -31,6 +41,7 @@ Repository = "https://github.com/avimedical/gesundheitsid-python"
 dev = [
     "pip-licenses>=5.5.5",
     "pytest>=9.1.1",
+    "pytest-django>=4.9.0",
     "respx>=0.22.0",
     "ruff>=0.16.0",
 ]
@@ -40,7 +51,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["gesundheitsid", "gesundheitsid_cli"]
+packages = ["gesundheitsid", "gesundheitsid_cli", "django_gesundheitsid"]
 
 [tool.ruff]
 line-length = 120
@@ -50,4 +61,4 @@ target-version = "py314"
 select = ["E", "F", "I", "UP", "B"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["gesundheitsid", "gesundheitsid_cli"]
+known-first-party = ["gesundheitsid", "gesundheitsid_cli", "django_gesundheitsid"]

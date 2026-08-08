@@ -20,8 +20,7 @@ What you *do* need: a publicly reachable HTTPS endpoint, four P-256 keypairs, an
 |---|---|
 | `gesundheitsid` | Framework-agnostic core: entity statements, trust-chain validation, Federation Master client, JOSE, PAR/token, mTLS. No web framework. |
 | `gesundheitsid_cli` | `keygen` (the four P-256 keypairs) and `fedreg` (the gematik registration XML). |
-
-A Django integration package is planned; see [Roadmap](#roadmap).
+| `django_gesundheitsid` | Django integration: views (entity statement, insurer picker, downstream auth/callback, downstream OIDC provider face), models, and a pluggable `Store` (in-memory / database / Redis). Install with the `django` extra: `uv add "gesundheitsid[django]"`. |
 
 ## Install
 
@@ -109,9 +108,9 @@ uv run ruff check . && uv run ruff format --check . && uv run pytest
 
 - [x] Core: entity statements, trust chain, Federation Master client, JOSE, mTLS
 - [x] CLI: keygen and registration XML
-- [ ] PAR + token exchange against sectoral IdPs
-- [ ] `django-gesundheitsid`: views, models, pluggable store (in-memory / database / Redis)
-- [ ] Downstream OIDC provider face, so Keycloak and friends can broker to it
+- [x] PAR + token exchange against sectoral IdPs
+- [x] `django_gesundheitsid`: views, models, pluggable store (in-memory / database / Redis)
+- [x] Downstream OIDC provider face, so Keycloak and friends can broker to it
 
 ## Specifications
 

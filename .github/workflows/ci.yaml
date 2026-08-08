@@ -43,8 +43,13 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
+      # `--extra django` pulls in Django/Authlib/django-redis so tests/django/* (which
+      # `pytest.ini`'s DJANGO_SETTINGS_MODULE always points at) can actually import and
+      # run -- without it this step still succeeds, but every django_gesundheitsid test
+      # collection-errors on a missing `django` module. `gesundheitsid` itself stays
+      # extra-free either way; see pyproject.toml's dependencies comment.
       - name: Install dependencies
-        run: uv sync --frozen
+        run: uv sync --frozen --extra django
 
       - name: Ruff check
         run: uv run ruff check .
@@ -94,16 +99,16 @@ jobs:
         run: uv build
 
       # Today this repo publishes ONE distribution, `gesundheitsid`, whose wheel contains
-      # both the `gesundheitsid` and `gesundheitsid_cli` import packages (see
-      # [tool.hatch.build.targets.wheel] in pyproject.toml). Asserting the wheel actually
-      # carries both is the regression that matters: a hatch misconfiguration silently
-      # dropping one of them would otherwise only surface after publishing, and a bad
-      # PyPI release cannot be overwritten.
+      # the `gesundheitsid`, `gesundheitsid_cli` and `django_gesundheitsid` import packages
+      # (see [tool.hatch.build.targets.wheel] in pyproject.toml). Asserting the wheel
+      # actually carries all three is the regression that matters: a hatch misconfiguration
+      # silently dropping one of them would otherwise only surface after publishing, and a
+      # bad PyPI release cannot be overwritten.
       #
       # When the planned split into separate `gesundheitsid` / `django-gesundheitsid` /
       # `gesundheitsid-cli` distributions lands, change this to assert one wheel per
       # distribution instead.
-      - name: Verify the wheel contains both packages
+      - name: Verify the wheel contains all three packages
         run: |
           set -euo pipefail
           echo "contents of dist/:"
@@ -114,7 +119,7 @@ jobs:
             exit 1
           fi
           wheel=$(find dist -maxdepth 1 -name '*.whl')
-          for pkg in gesundheitsid gesundheitsid_cli; do
+          for pkg in gesundheitsid gesundheitsid_cli django_gesundheitsid; do
             if ! unzip -l "$wheel" | grep -q "  ${pkg}/"; then
               echo "::error::wheel ${wheel} does not contain the ${pkg} package"
               exit 1
