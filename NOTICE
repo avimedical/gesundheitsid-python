@@ -1,0 +1,34 @@
+gesundheitsid-python
+Copyright 2026 avimedical GmbH
+
+This product includes software developed at avimedical GmbH.
+
+---
+
+Prior art and references
+------------------------
+
+This project is an independent Python implementation written from the primary
+specifications listed below. It is not a derivative of, and contains no code
+copied from, the projects named here. They are acknowledged because they solved
+the same problem first and were consulted for behavioural questions:
+
+  * oviva-ag/ehealthid-relying-party (Java, Apache-2.0)
+    https://github.com/oviva-ag/ehealthid-relying-party
+
+  * BAYOOMED/TI-RelyingParty (C#/.NET, Apache-2.0)
+    https://github.com/BAYOOMED/TI-RelyingParty
+
+Should any file in this repository later become a direct port of code from one
+of those projects, that file must carry the original copyright notice and this
+NOTICE must name it explicitly.
+
+Primary specifications implemented
+----------------------------------
+
+  * gemSpec_IDP_Sek, gemSpec_IDP_FD, gemSpec_IDP_FedMaster (gematik GmbH)
+    https://gemspec.gematik.de/
+  * OpenID Federation 1.0
+  * RFC 9126 (OAuth 2.0 Pushed Authorization Requests)
+  * RFC 7636 (PKCE)
+  * RFC 7515 / 7516 / 7517 / 7518 (JWS / JWE / JWK / JWA)

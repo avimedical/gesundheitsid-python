@@ -1,0 +1,37 @@
+# Local gematik reference federation (app-gemSekIdp: gsi-fedmaster + gsi-server) for
+# offline GesundheitsID development. See docs/local-federation.md for exactly what was
+# verified about these images and how to build them.
+#
+# gematik does NOT publish these images on GHCR or Docker Hub (verified 2026-08-08 --
+# 0 GitHub Packages on gematik/app-gemSekIdp; no gsi-server/gsi-fedmaster repo among the
+# gematik1 Docker Hub org's 93 repos). You must build them locally first; until you do,
+# `docker compose up` fails with "pull access denied" / "manifest unknown" -- that is
+# intentional so this file never claims an image exists that gematik does not publish.
+#
+# `pull_policy: never` requires Compose Spec support for that key (Docker Compose v2.10+).
+# If your compose tool rejects it, delete the line -- it only prevents an accidental pull
+# attempt against a registry that has nothing to serve.
+
+services:
+  gsi-fedmaster:
+    image: local/idm/gsi-fedmaster:8.4.2 # tag produced by the build in docs/local-federation.md; check it matches your checkout
+    pull_policy: never
+    ports:
+      - "8083:8083" # HTTP API / .well-known/openid-federation for the fedmaster entity itself
+      - "8183:8183" # actuator health
+    environment:
+      # application.yml defaults ISSUER_IDP_01 to 127.0.0.1, unreachable from inside this
+      # container -- point it at gsi-server's compose service name instead.
+      ISSUER_IDP_01: "http://gsi-server:8085"
+
+  gsi-server:
+    image: local/idm/gsi-server:8.4.2 # tag produced by the build in docs/local-federation.md; check it matches your checkout
+    pull_policy: never
+    ports:
+      - "8085:8085" # entity statement: GET /.well-known/openid-federation
+      - "8185:8185" # actuator health
+    environment:
+      # Same reasoning as gsi-fedmaster's ISSUER_IDP_01 above, in the other direction.
+      FEDMASTER_SERVER_URL: "http://gsi-fedmaster:8083"
+    depends_on:
+      - gsi-fedmaster

@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+.venv/
+dist/
+build/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# Key material must never be committed. keygen writes here by default.
+*_jwks.json
+*.pem
+*.p12
+secrets/
+.env
