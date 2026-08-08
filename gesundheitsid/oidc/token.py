@@ -81,6 +81,9 @@ def exchange_code(
             )
         raise ProtocolError(f"token request to {endpoint} failed with status {response.status_code}: {response.text}")
 
+    if not isinstance(body, dict):
+        raise ProtocolError(f"token response from {endpoint} is not a JSON object: {body!r}")
+
     id_token = body.get("id_token")
     if not id_token:
         raise ProtocolError(f"token response from {endpoint} is missing id_token: {body}")

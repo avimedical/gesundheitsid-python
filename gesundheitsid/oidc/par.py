@@ -98,6 +98,9 @@ def push_authorization_request(
     except ValueError as exc:
         raise ProtocolError(f"PAR response from {endpoint} is not valid JSON: {exc}") from exc
 
+    if not isinstance(body, dict):
+        raise ProtocolError(f"PAR response from {endpoint} is not a JSON object: {body!r}")
+
     request_uri = body.get("request_uri")
     expires_in = body.get("expires_in")
     if not request_uri or expires_in is None:
