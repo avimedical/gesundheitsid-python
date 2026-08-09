@@ -42,6 +42,9 @@ def test_openid_configuration_advertises_all_endpoints(client, gesundheitsid_set
     assert body["jwks_uri"].endswith(reverse("django_gesundheitsid:jwks"))
     assert body["code_challenge_methods_supported"] == ["S256"]
     assert body["id_token_signing_alg_values_supported"] == ["ES256"]
+    # `sub` is an HMAC of the KVNR under a per-deployment pepper, so it is not globally
+    # correlatable. Advertising "public" would tell clients the opposite of what is true.
+    assert body["subject_types_supported"] == ["pairwise"]
 
 
 def test_jwks_publishes_the_downstream_signing_keys_public_half(client, rp_keys: RpKeys) -> None:
@@ -73,6 +76,39 @@ def test_downstream_ids_sub_is_stable_across_two_separate_logins_for_the_same_kv
         subs.append(claims["sub"])
 
     assert subs[0] == subs[1]
+
+
+def test_downstream_id_token_carries_a_unique_jti_per_mint(
+    client,
+    federation_routes: FederationRoutes,
+    fake_federation: FakeFederation,
+    rp_keys: RpKeys,
+    respx_mock: respx.MockRouter,
+) -> None:
+    """`sub` is stable on purpose; `jti` must not be, or it cannot identify one redemption.
+
+    The downstream code is single-use, but the id_token it is exchanged for is a bearer artifact
+    that stays valid for its whole `exp` window and carries nothing to say it has already been
+    redeemed. A consumer treating it as proof of a login therefore needs a per-token identifier to
+    remember. This asserts both halves: the claim is present, and two logins for the SAME patient
+    (identical `sub`) still get different `jti`s -- a `jti` derived from the identity rather than
+    the mint would look correct here and be useless for replay detection.
+    """
+    downstream_keys = load_jwks(public_jwks([rp_keys.downstream_sig]))
+    tokens = []
+
+    for _ in range(2):
+        result = _drive_full_flow(client, federation_routes, fake_federation, rp_keys, respx_mock, kvnr="X111111111")
+        response = client.post(
+            reverse("django_gesundheitsid:token"), _token_form(result["downstream_code"], result["pkce_verifier"])
+        )
+        assert response.status_code == 200
+        tokens.append(verify_compact(response.json()["id_token"], downstream_keys))
+
+    assert tokens[0]["jti"]
+    assert tokens[1]["jti"]
+    assert tokens[0]["sub"] == tokens[1]["sub"]
+    assert tokens[0]["jti"] != tokens[1]["jti"]
 
 
 def test_downstream_ids_sub_differs_for_different_kvnrs(

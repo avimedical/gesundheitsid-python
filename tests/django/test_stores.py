@@ -18,6 +18,7 @@ import time
 from unittest import mock
 
 import pytest
+from django.core.exceptions import ImproperlyConfigured
 from django.db import connections
 
 from django_gesundheitsid.stores import CacheStore, DatabaseStore, InMemoryStore, get_store
@@ -30,7 +31,7 @@ def store(request: pytest.FixtureRequest):
     if request.param == "memory":
         return InMemoryStore()
     if request.param == "cache":
-        return CacheStore()
+        return CacheStore(allow_non_atomic=True)
     return DatabaseStore()
 
 
@@ -90,7 +91,12 @@ def test_get_store_memory_returns_a_shared_singleton(settings) -> None:
 
 
 def test_get_store_resolves_cache_backend(settings) -> None:
-    settings.GESUNDHEITSID = {**settings.GESUNDHEITSID, "STORE_BACKEND": "cache"}
+    settings.GESUNDHEITSID = {
+        **settings.GESUNDHEITSID,
+        "STORE_BACKEND": "cache",
+        # LocMemCache here; the atomicity guard has its own tests below.
+        "ALLOW_NON_ATOMIC_STORE": True,
+    }
     assert isinstance(get_store(), CacheStore)
 
 
@@ -147,7 +153,7 @@ def test_cache_store_pop_uses_getdel_when_the_backend_is_django_redis_like() -> 
     fake_cache = mock.Mock()
     fake_cache.client = fake_client_wrapper
 
-    store_ = CacheStore()
+    store_ = CacheStore(allow_non_atomic=True)
     store_._cache = fake_cache  # swapping the underlying cache is the point of this test
 
     result = store_.pop("code")
@@ -159,8 +165,43 @@ def test_cache_store_pop_uses_getdel_when_the_backend_is_django_redis_like() -> 
 
 
 def test_cache_store_pop_falls_back_to_get_then_delete_for_a_plain_cache() -> None:
-    store_ = CacheStore()  # LocMemCache in tests/django/settings.py -- no `.client`
+    store_ = CacheStore(allow_non_atomic=True)  # LocMemCache in tests/django/settings.py -- no `.client`
     store_.set("code", b"authorization-code", ttl_seconds=60)
 
     assert store_.pop("code") == b"authorization-code"
     assert store_.get("code") is None
+
+
+def test_cache_store_refuses_a_non_atomic_backend_by_default() -> None:
+    """A cache that cannot pop atomically is refused at construction, not tolerated silently.
+
+    The `get()`-then-`delete()` fallback above is not a weaker single-use guarantee, it is none:
+    two requests racing on one authorization code both receive it. A misconfigured CACHES alias
+    is indistinguishable from a correct one until two logins happen to overlap, which is exactly
+    the kind of defect that surfaces in production and nowhere else -- so it costs a startup
+    error rather than a log line nobody reads.
+    """
+    with pytest.raises(ImproperlyConfigured, match="cannot pop atomically"):
+        CacheStore()  # LocMemCache, per tests/django/settings.py
+
+
+def test_cache_store_allows_a_non_atomic_backend_when_explicitly_opted_in() -> None:
+    """The opt-out is explicit, so a deployment accepting the race has to say so.
+
+    Deliberately not inferred from `DEBUG` (Django's test runner forces it off, so every cache
+    test here would have had to fight the guard) nor from replica count (threads race inside one
+    process just as two replicas do).
+    """
+    assert CacheStore(allow_non_atomic=True).pop("never-set") is None
+
+
+def test_get_store_passes_the_configured_opt_out_through(settings) -> None:
+    """The guard has to be reachable from configuration, or it only ever fires in unit tests."""
+    settings.GESUNDHEITSID = {
+        **settings.GESUNDHEITSID,
+        "STORE_BACKEND": "cache",
+        "ALLOW_NON_ATOMIC_STORE": False,
+    }
+
+    with pytest.raises(ImproperlyConfigured, match="cannot pop atomically"):
+        get_store()

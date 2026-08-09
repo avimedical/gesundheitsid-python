@@ -13,6 +13,7 @@ from __future__ import annotations
 import datetime
 
 from django.core.cache import caches
+from django.core.exceptions import ImproperlyConfigured
 from django.db import transaction
 from django.utils import timezone
 
@@ -51,8 +52,45 @@ class CacheStore:
       path) or use `DatabaseStore` instead. Do not rely on this fallback for correctness.
     """
 
-    def __init__(self, cache_alias: str = "default") -> None:
+    def __init__(self, cache_alias: str = "default", *, allow_non_atomic: bool = False) -> None:
         self._cache = caches[cache_alias]
+        self._require_atomic_pop_unless_allowed(cache_alias, allow_non_atomic=allow_non_atomic)
+
+    def _require_atomic_pop_unless_allowed(self, cache_alias: str, *, allow_non_atomic: bool) -> None:
+        """Refuse to start when this backend cannot pop atomically.
+
+        The fallback `get()`-then-`delete()` path below is not a slightly weaker guarantee, it is
+        no guarantee: two requests racing on one authorization code both receive it and both
+        "win". That is the single-use property authorization codes exist to have, and losing it
+        is silent -- a misconfigured `CACHES` alias looks and behaves exactly like a correct one
+        until two logins happen to overlap, which is the kind of defect that only ever surfaces
+        in production. So it costs a startup error rather than a log line nobody reads.
+
+        Refused by default, and opted out of explicitly via
+        `GESUNDHEITSID["ALLOW_NON_ATOMIC_STORE"]`, rather than inferred from `DEBUG` or from
+        replica count. Neither is the right signal: Django's test runner forces `DEBUG` off, and
+        threads race inside a single process just as two replicas do. A deployment that genuinely
+        does not care has to say so.
+        """
+        if allow_non_atomic or self._supports_atomic_pop():
+            return
+        raise ImproperlyConfigured(
+            f"GESUNDHEITSID['STORE_BACKEND'] = 'cache' with CACHES['{cache_alias}'] "
+            f"({type(self._cache).__name__}) cannot pop atomically, so single-use authorization "
+            "codes are not enforceable. Use a django-redis cache (Redis >= 6.2, for GETDEL), set "
+            "STORE_BACKEND = 'database', or -- only where races genuinely cannot matter -- set "
+            "ALLOW_NON_ATOMIC_STORE = True."
+        )
+
+    def _supports_atomic_pop(self) -> bool:
+        client_wrapper = getattr(self._cache, "client", None)
+        get_client = getattr(client_wrapper, "get_client", None)
+        if get_client is None:
+            return False
+        try:
+            return hasattr(get_client(write=True), "getdel")
+        except Exception:  # pragma: no cover - a cache that cannot hand out a client is not atomic
+            return False
 
     def get(self, key: str) -> bytes | None:
         return self._cache.get(key)
@@ -158,7 +196,7 @@ def get_store() -> Store:
     if settings_.store_backend is StoreBackend.MEMORY:
         return _shared_memory_store()
     if settings_.store_backend is StoreBackend.CACHE:
-        return CacheStore(cache_alias=settings_.cache_alias)
+        return CacheStore(cache_alias=settings_.cache_alias, allow_non_atomic=settings_.allow_non_atomic_store)
     if settings_.store_backend is StoreBackend.DATABASE:
         return DatabaseStore()
     raise AssertionError(f"unhandled StoreBackend: {settings_.store_backend!r}")  # pragma: no cover

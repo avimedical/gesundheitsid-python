@@ -107,6 +107,17 @@ class GesundheitsIdSettings:
     mtls_tmp_dir: Path
     store_backend: StoreBackend
     cache_alias: str
+    #: Opt out of the startup check that `STORE_BACKEND = "cache"` can pop atomically.
+    #:
+    #: The check exists because the non-atomic fallback in `CacheStore.pop` is not a weaker
+    #: single-use guarantee but none at all: two requests racing on one authorization code both
+    #: receive it. A cache alias that cannot do `GETDEL` is indistinguishable from one that can
+    #: until two logins overlap, so it is refused by default rather than discovered in production.
+    #:
+    #: Set True only where that genuinely does not matter -- a test suite, or a single-threaded
+    #: local run. Never in a deployment serving real logins; use Redis or `STORE_BACKEND =
+    #: "database"` there instead.
+    allow_non_atomic_store: bool
     trust_anchor_jwks: dict
     downstream_clients: tuple[DownstreamClient, ...]
     pairwise_pepper: str = field(repr=False)
@@ -148,6 +159,7 @@ class GesundheitsIdSettings:
         mtls_tmp_dir = Path(_require_str(raw, "MTLS_TMP_DIR"))
         store_backend = _require_store_backend(raw)
         cache_alias = str(raw.get("CACHE_ALIAS", "default"))
+        allow_non_atomic_store = bool(raw.get("ALLOW_NON_ATOMIC_STORE", False))
         trust_anchor_jwks = _require_jwks(raw, "TRUST_ANCHOR_JWKS")
         downstream_clients = _parse_downstream_clients(raw.get("DOWNSTREAM_CLIENTS", []))
         pairwise_pepper = _require_pairwise_pepper(raw)
@@ -167,6 +179,7 @@ class GesundheitsIdSettings:
             mtls_tmp_dir=mtls_tmp_dir,
             store_backend=store_backend,
             cache_alias=cache_alias,
+            allow_non_atomic_store=allow_non_atomic_store,
             trust_anchor_jwks=trust_anchor_jwks,
             downstream_clients=downstream_clients,
             pairwise_pepper=pairwise_pepper,

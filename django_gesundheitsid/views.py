@@ -456,7 +456,10 @@ def openid_configuration(request: HttpRequest) -> HttpResponse:
             "token_endpoint": base + reverse("django_gesundheitsid:token"),
             "jwks_uri": base + reverse("django_gesundheitsid:jwks"),
             "response_types_supported": ["code"],
-            "subject_types_supported": ["public"],
+            # Pairwise, not public: `sub` is an HMAC of the KVNR under a per-deployment pepper
+            # (see `_pairwise_subject`), so it is not a globally correlatable identifier for the
+            # end user. Advertising "public" would tell clients the opposite.
+            "subject_types_supported": ["pairwise"],
             "id_token_signing_alg_values_supported": ["ES256"],
             "scopes_supported": list(settings_.scopes),
             "token_endpoint_auth_methods_supported": ["none", "private_key_jwt"],
@@ -531,6 +534,13 @@ def token(request: HttpRequest) -> HttpResponse:
             "aud": client_id,
             "iat": now,
             "exp": now + _DOWNSTREAM_ID_TOKEN_TTL_SECONDS,
+            # A unique id per minted token, so a consumer can enforce single use. Without it,
+            # anything that accepts this id_token as proof of a login accepts it repeatedly for
+            # the whole `exp` window -- the downstream code that produced it is single-use, but
+            # the token it was exchanged for is a bearer artifact and nothing about it says
+            # "already redeemed". avimedical's Keycloak grant rejects a repeated `jti`; any other
+            # consumer needs the claim to be present before it can do the same.
+            "jti": generate_state(),
         }
     )
     if payload.get("nonce"):
