@@ -93,9 +93,14 @@ reference sectoral IdP *and* a minimal Federation Master, so a complete federati
 offline:
 
 ```shell
-docker compose up -d          # gsi-fedmaster + gsi-server
+uv run python scripts/local_federation_certs.py   # once
+docker compose up -d                              # gsi-fedmaster + gsi-server + TLS terminator
 uv run pytest -m integration
 ```
+
+The images are not published by gematik and must be built locally first, and their build needs
+a one-line fix -- both documented in [docs/local-federation.md](docs/local-federation.md). Those
+tests skip cleanly when the federation is not running.
 
 ## Development
 

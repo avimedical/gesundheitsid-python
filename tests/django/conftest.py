@@ -122,7 +122,20 @@ def fake_federation() -> FakeFederation:
     idp_key = generate_p256_key(KeyPurpose.ENTITY_STATEMENT_SIG)
     subordinate_key = generate_p256_key(KeyPurpose.ENTITY_STATEMENT_SIG)
 
-    fm_claims = _entity_statement_claims(iss=FM_BASE_URL, sub=FM_BASE_URL, jwks=public_jwks([fm_signing_key]))
+    fm_claims = _entity_statement_claims(
+        iss=FM_BASE_URL,
+        sub=FM_BASE_URL,
+        jwks=public_jwks([fm_signing_key]),
+        # Endpoints are discovered from here, exactly as a real Federation Master publishes
+        # them -- see tests/federation/conftest.py for why the paths are not invented.
+        metadata={
+            "federation_entity": {
+                "federation_fetch_endpoint": f"{FM_BASE_URL}/federation_fetch_endpoint",
+                "federation_list_endpoint": f"{FM_BASE_URL}/federation_list",
+                "idp_list_endpoint": f"{FM_BASE_URL}/.well-known/idp_list",
+            }
+        },
+    )
     fm_token = sign_compact(fm_claims, fm_signing_key, typ="entity-statement+jwt")
 
     idp_claims = _entity_statement_claims(
@@ -149,7 +162,7 @@ def fake_federation() -> FakeFederation:
     )
     subordinate_token = sign_compact(subordinate_claims, fm_signing_key, typ="entity-statement+jwt")
 
-    idps_list_claims = {"idps": [{"iss": IDP_ISSUER, "organization_name": "Test Insurer", "logo_uri": None}]}
+    idps_list_claims = {"idp_entity": [{"iss": IDP_ISSUER, "organization_name": "Test Insurer", "logo_uri": None}]}
     idps_list_token = sign_compact(idps_list_claims, fm_signing_key, typ="JWT")
 
     return FakeFederation(
@@ -183,13 +196,13 @@ class FederationRoutes:
         )
 
     def subordinate_statement(self, *, status_code: int = 200) -> respx.Route:
-        return self.respx_mock.get(f"{FM_BASE_URL}/federation/fetch").mock(
+        return self.respx_mock.get(f"{FM_BASE_URL}/federation_fetch_endpoint").mock(
             return_value=httpx.Response(status_code, text=self.fed.subordinate_statement_token)
         )
 
     def idps_list(self, *, status_code: int = 200, token: str | None = None) -> respx.Route:
         body = token if token is not None else self.fed.idps_list_token
-        return self.respx_mock.get(f"{FM_BASE_URL}/federation/listidps").mock(
+        return self.respx_mock.get(f"{FM_BASE_URL}/.well-known/idp_list").mock(
             return_value=httpx.Response(status_code, text=body)
         )
 

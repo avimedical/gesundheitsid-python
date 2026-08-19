@@ -164,12 +164,39 @@ def _resolve(
             f"subordinate statement for '{subject_issuer}' has expired (exp={subordinate.exp}, now={now})"
         )
 
-    # Step 4: THE authoritative keys/metadata are the subordinate statement's, never the
-    # leaf's own self-signed ones. See module docstring.
+    # Step 4: keys come from the subordinate statement and ONLY from there -- that is the
+    # property this module exists to enforce (see module docstring).
+    #
+    # Metadata is different, and taking it from the subordinate statement alone was wrong.
+    # In OpenID Federation the superior's `metadata` is an overlay on top of what the leaf
+    # publishes about itself, not a replacement for it: gematik's reference Federation Master
+    # returns only `{"openid_provider": {"client_registration_types_supported": ["automatic"]}}`,
+    # while the authorization, token and PAR endpoints live in the IdP's own entity
+    # configuration. Replacing wholesale therefore produced a TrustChain with no endpoints at
+    # all, so PAR had nothing to call. Merge with the superior winning per key, which keeps the
+    # superior authoritative wherever it actually says something.
     return TrustChain(
         subject=subject_issuer,
         trust_anchor=fm_statement.iss,
         signing_keys=subordinate.jwks,
-        metadata=subordinate.metadata,
+        metadata=_merge_metadata(self_signed.metadata, subordinate.metadata),
         expires_at=subordinate.exp,
     )
+
+
+def _merge_metadata(leaf: dict, superior: dict) -> dict:
+    """Leaf metadata as the base, with the superior's entries overriding it per entity type
+    and per key within an entity type.
+
+    Deliberately a two-level merge and no deeper: entity type (`openid_provider`, ...) then
+    the individual metadata parameters inside it, which is exactly how OpenID Federation
+    layers these. Anything deeper would start merging the *values* of individual parameters,
+    where a superior's list is meant to replace the leaf's, not extend it.
+    """
+    merged = {entity_type: dict(params) for entity_type, params in (leaf or {}).items()}
+    for entity_type, params in (superior or {}).items():
+        if isinstance(params, dict):
+            merged.setdefault(entity_type, {}).update(params)
+        else:
+            merged[entity_type] = params
+    return merged

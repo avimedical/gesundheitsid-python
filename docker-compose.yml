@@ -22,7 +22,12 @@ services:
     environment:
       # application.yml defaults ISSUER_IDP_01 to 127.0.0.1, unreachable from inside this
       # container -- point it at gsi-server's compose service name instead.
-      ISSUER_IDP_01: "http://gsi-server:8085"
+      # Must equal gsi-server's own `iss` exactly, or the fedmaster will not vouch for it.
+      # Both are the https URL the TLS terminator publishes, because that is the URL a
+      # host-side validator can actually fetch (see docker/local-federation/nginx.conf).
+      ISSUER_IDP_01: "https://localhost:8445"
+      # The fedmaster's own `iss`, and what gsi-server puts in `authority_hints`.
+      FEDMASTER_SERVER_URL: "https://localhost:8443"
 
   gsi-server:
     image: local/idm/gsi-server:8.4.2 # tag produced by the build in docs/local-federation.md; check it matches your checkout
@@ -32,6 +37,22 @@ services:
       - "8185:8185" # actuator health
     environment:
       # Same reasoning as gsi-fedmaster's ISSUER_IDP_01 above, in the other direction.
-      FEDMASTER_SERVER_URL: "http://gsi-fedmaster:8083"
+      FEDMASTER_SERVER_URL: "https://localhost:8443"
+      GSI_SERVER_URL: "https://localhost:8445"
     depends_on:
       - gsi-fedmaster
+
+  # See docker/local-federation/nginx.conf for why this exists at all. Run
+  # `uv run python scripts/local_federation_certs.py` once before `docker compose up`.
+  tls-proxy:
+    image: docker.io/library/nginx:1.27-alpine
+    ports:
+      - "8443:8443" # https -> gsi-fedmaster
+      - "8445:8445" # https -> gsi-server
+    volumes:
+      - ./docker/local-federation/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./.local-federation/server.pem:/certs/server.pem:ro
+      - ./.local-federation/server.key:/certs/server.key:ro
+    depends_on:
+      - gsi-fedmaster
+      - gsi-server

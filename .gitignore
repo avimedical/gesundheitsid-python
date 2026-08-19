@@ -13,3 +13,6 @@ build/
 *.p12
 secrets/
 .env
+
+# throwaway TLS material for the local reference federation (scripts/local_federation_certs.py)
+.local-federation/

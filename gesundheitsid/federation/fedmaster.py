@@ -51,7 +51,7 @@ class FederationMasterEnvironment(StrEnum):
 
 @dataclass(frozen=True)
 class SectoralIdp:
-    """One entry from `federation/listidps`: a health insurer's sectoral IdP."""
+    """One entry from the Federation Master's idp_list endpoint: a health insurer's sectoral IdP."""
 
     issuer: str
     organization_name: str
@@ -66,10 +66,18 @@ def _capped_ttl(exp: int, cap_seconds: int) -> int:
     return max(1, min(remaining, cap_seconds))
 
 
+#: Array key in the Federation Master's signed idp_list payload. gematik's reference
+#: Federation Master emits `idp_entity` (verified against a running gsi-fedmaster 8.4.2); this
+#: code previously looked for `idps`, which simply is not there. As with the endpoint paths, the
+#: unit tests could not catch it -- they built the fixture from the same assumption the parser
+#: made.
+_IDP_LIST_ARRAY_KEY = "idp_entity"
+
+
 def _parse_idps(claims: dict) -> list[SectoralIdp]:
-    entries = claims.get("idps")
+    entries = claims.get(_IDP_LIST_ARRAY_KEY)
     if not isinstance(entries, list):
-        raise FederationMasterError("federation/listidps payload is missing its 'idps' array")
+        raise FederationMasterError(f"idp_list payload is missing its {_IDP_LIST_ARRAY_KEY!r} array")
 
     idps = []
     for entry in entries:
@@ -83,7 +91,7 @@ def _parse_idps(claims: dict) -> list[SectoralIdp]:
                 )
             )
         except (KeyError, TypeError) as exc:
-            raise FederationMasterError(f"federation/listidps entry is malformed: {exc}") from exc
+            raise FederationMasterError(f"idp_list entry is malformed: {exc}") from exc
     return idps
 
 
@@ -116,6 +124,35 @@ class FederationMasterClient:
     @property
     def base_url(self) -> str:
         return self._base_url
+
+    def _federation_endpoint(self, name: str) -> str:
+        """Resolve one `federation_entity` endpoint from the trust anchor's own entity
+        configuration.
+
+        OpenID Federation 1.0 publishes these in `metadata.federation_entity` precisely so a
+        relying party does not have to know an operator's URL layout, and the paths are NOT
+        conventional: gematik's own reference Federation Master serves
+        `/federation_fetch_endpoint`, `/federation_list` and `/.well-known/idp_list`. This code
+        previously guessed `/federation/fetch`, `/federation/list` and `/federation/listidps`,
+        which 404 against it -- so `list_idps()` (the insurer picker AND the allowlist that
+        constrains `idp_iss` before any trust-chain resolution) and `fetch_subordinate_statement()`
+        (the core of that resolution) could never have worked against a real Federation Master.
+        Nothing caught it because the unit tests mock whichever URL the client asks for, which
+        makes any path self-consistently "correct".
+
+        Discovery costs nothing extra: the entity configuration is fetched and cached already.
+        A Federation Master that does not advertise the endpoint is a hard failure rather than a
+        fallback to a guess -- guessing is what produced the bug.
+        """
+        statement = self.entity_configuration()
+        federation_entity = (statement.claims.get("metadata") or {}).get("federation_entity") or {}
+        endpoint = federation_entity.get(name)
+        if not isinstance(endpoint, str) or not endpoint:
+            raise FederationMasterError(
+                f"Federation Master at {self._base_url} does not advertise "
+                f"metadata.federation_entity.{name}; cannot proceed without it"
+            )
+        return endpoint
 
     def entity_configuration(self) -> EntityStatement:
         """Fetch and verify the Federation Master's own entity configuration.
@@ -162,7 +199,7 @@ class FederationMasterClient:
         fm_statement = self.entity_configuration()
         fm_keys = load_jwks(fm_statement.jwks)
 
-        url = f"{self._base_url}/federation/fetch"
+        url = self._federation_endpoint("federation_fetch_endpoint")
         token = self._request(url, params={"iss": self._base_url, "sub": sub})
         try:
             statement = verify_entity_statement(token, fm_keys)
@@ -179,16 +216,17 @@ class FederationMasterClient:
         return statement
 
     def list_members(self) -> list[str]:
-        """The federation's member issuers, from `federation/list`. Not cached: this list
+        """The federation's member issuers, from its advertised federation_list_endpoint.
+        Not cached: this list
         is comparatively cheap to fetch and has no per-response exp to key a TTL off of."""
-        url = f"{self._base_url}/federation/list"
+        url = self._federation_endpoint("federation_list_endpoint")
         response_text = self._request(url)
         try:
             members = json.loads(response_text)
         except (TypeError, ValueError) as exc:
-            raise FederationMasterError(f"federation/list at {url} did not return valid JSON: {exc}") from exc
+            raise FederationMasterError(f"federation list endpoint at {url} did not return valid JSON: {exc}") from exc
         if not isinstance(members, list):
-            raise FederationMasterError(f"federation/list at {url} did not return a JSON array")
+            raise FederationMasterError(f"federation list endpoint at {url} did not return a JSON array")
         return members
 
     def list_idps(self) -> list[SectoralIdp]:
@@ -202,11 +240,12 @@ class FederationMasterClient:
         trying to sign in. If there is no cached copy either, the failure propagates.
         """
         cache_key = self._cache_key("idps")
-        url = f"{self._base_url}/federation/listidps"
+        url = f"{self._base_url}/<idp_list_endpoint unresolved>"
 
         try:
             fm_statement = self.entity_configuration()
             fm_keys = load_jwks(fm_statement.jwks)
+            url = self._federation_endpoint("idp_list_endpoint")
             token = self._request(url)
             claims = verify_compact(token, fm_keys)
             idps = _parse_idps(claims)

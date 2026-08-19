@@ -13,7 +13,7 @@ from gesundheitsid.crypto import KeyPurpose, generate_p256_key, public_jwks, sig
 from gesundheitsid.errors import FederationMasterError
 from gesundheitsid.federation.fedmaster import FederationMasterClient, FederationMasterEnvironment
 from gesundheitsid.storage import InMemoryStore
-from tests.federation.conftest import FakeFederation, FederationRoutes
+from tests.federation.conftest import FM_LIST_PATH, IDP_LIST_ARRAY_KEY, FakeFederation, FederationRoutes
 
 
 def _client(fake_federation: FakeFederation, **kwargs: object) -> FederationMasterClient:
@@ -145,6 +145,9 @@ def test_fetch_subordinate_statement_is_cached_and_issues_no_second_http_request
 def test_list_members_returns_the_parsed_json_array(
     federation_routes: FederationRoutes, fake_federation: FakeFederation
 ) -> None:
+    # Discovery first: the list endpoint's URL comes from the Federation Master's own
+    # metadata, not from a path this client made up.
+    federation_routes.fm_entity_configuration()
     federation_routes.members_list(members=[fake_federation.leaf_issuer, fake_federation.fm_base_url])
     client = _client(fake_federation)
 
@@ -156,7 +159,10 @@ def test_list_members_returns_the_parsed_json_array(
 def test_list_members_rejects_a_non_array_response(
     federation_routes: FederationRoutes, fake_federation: FakeFederation
 ) -> None:
-    federation_routes.respx_mock.get(f"{fake_federation.fm_base_url}/federation/list").mock(
+    # The entity configuration is needed even here: the list endpoint's URL is discovered
+    # from it rather than assumed.
+    federation_routes.fm_entity_configuration()
+    federation_routes.respx_mock.get(f"{fake_federation.fm_base_url}{FM_LIST_PATH}").mock(
         return_value=httpx.Response(200, text=json.dumps({"not": "a list"}))
     )
     client = _client(fake_federation)
@@ -166,7 +172,7 @@ def test_list_members_rejects_a_non_array_response(
 
 
 def _idps_token(fake_federation: FakeFederation, entries: list[dict]) -> str:
-    return sign_compact({"idps": entries}, fake_federation.fm_signing_key)
+    return sign_compact({IDP_LIST_ARRAY_KEY: entries}, fake_federation.fm_signing_key)
 
 
 def test_list_idps_returns_parsed_verified_entries(
