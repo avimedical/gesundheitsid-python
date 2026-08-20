@@ -14,7 +14,22 @@
 
 services:
   gsi-fedmaster:
-    image: local/idm/gsi-fedmaster:8.4.2 # tag produced by the build in docs/local-federation.md; check it matches your checkout
+    # `-rp` tag, not the plain `8.4.2` gsi-server uses: this image is NOT the one gematik's
+    # own build produces. `KeyConfiguration`/`ResourceReader.getFileFromResourceAsTmpFile`
+    # loads a relying party's registered key via `Thread.currentThread().
+    # getContextClassLoader().getResourceAsStream(...)` -- i.e. ONLY from inside the running
+    # jar's own classpath (`BOOT-INF/classes/...`), because the Dockerfile launches it with
+    # `java -jar`, whose classpath is fixed to the jar's own nested archives (Spring Boot's
+    # `JarLauncher`, confirmed by decompiling the built jar's manifest and loader classes --
+    # `loader.path`/`PropertiesLauncher`-style extra locations are simply not consulted by
+    # `JarLauncher`). A bind-mounted key file elsewhere in the container filesystem is
+    # therefore invisible to it, no matter where it's mounted -- there is no shortcut here.
+    # This image is gsi-fedmaster:8.4.2 rebuilt with our RP's ES-signing PUBLIC key baked
+    # into gsi-fedmaster/src/main/resources/keys/ref-rp-local-es-sig-pubkey.pem (only the
+    # public half -- see docs/local-federation.md's "Registering our relying party" section
+    # for the exact rebuild recipe, which is why the tag is retagged distinctly rather than
+    # silently overwriting `8.4.2`).
+    image: local/idm/gsi-fedmaster:8.4.2-rp
     pull_policy: never
     ports:
       - "8083:8083" # HTTP API / .well-known/openid-federation for the fedmaster entity itself
@@ -33,6 +48,36 @@ services:
       ISSUER_IDP_01: "https://idp.gsi.test:8445"
       # The fedmaster's own `iss`, and what gsi-server puts in `authority_hints`.
       FEDMASTER_SERVER_URL: "https://fedmaster.gsi.test:8443"
+      # FedMasterConfiguration.relyingPartyConfigs[0], replacing the shipped "GRAS"
+      # example RP with ours -- ALL FIVE fields, not just the ones we care about
+      # changing. DEFECT FOUND: Spring Boot's Binder does not merge a List<T>-typed
+      # @ConfigurationProperties value across property sources per-element; once ANY
+      # property source defines part of an indexed list, THAT SOURCE ALONE supplies the
+      # WHOLE element, silently nulling every field the override didn't also set. A
+      # first attempt here that only set KEYCONFIG_FILENAME/KEYCONFIG_KEYID (relying on
+      # the yaml's own `${ISSUER_RP_01:...}` placeholder for `issuer`, the way
+      # ISSUER_IDP_01 works for identityProviderConfigs) produced
+      # RelyingPartyConfig(issuer=null, organizationName=null, keyConfig=KeyConfig(...,
+      # use=null, ...)) -- confirmed via gsi-fedmaster's own startup log line -- which
+      # then NullPointerException'd inside EntityStatementFederationMemberBuilder.getKey
+      # (issuer=null) AND would have thrown again inside
+      # KeyConfiguration.getFederationPubKey (`Optional.of(keyConfiguration.getUse())`
+      # with use=null -- Optional.of rejects null) had the first NPE not fired first.
+      # `${ISSUER_IDP_01:...}`'s placeholder mechanism is unaffected by this because it
+      # is a plain string substitution INSIDE the yaml's own text, resolved while
+      # parsing that one property source -- not a second source contending for the same
+      # indexed list the way these env vars are.
+      FEDMASTER_RELYINGPARTYCONFIGS_0_ISSUER: "https://rp.gsi.test:8447"
+      FEDMASTER_RELYINGPARTYCONFIGS_0_ORGANIZATIONNAME: "gesundheitsid-python local federation RP"
+      # The ES-signing PUBLIC key `gesundheitsid-cli keygen` wrote to
+      # .local-federation/rp/, baked into the `-rp` image tag above (see its comment for
+      # why a bind mount cannot do this instead). The key ID must equal
+      # GESUNDHEITSID["KEYS"]["ENTITY_STATEMENT_SIG"]'s own `kid` -- keygen prints it,
+      # also visible via `jq .keys[0].kid .local-federation/rp/es_sig_*_jwks.json`. If
+      # you regenerate that key, this value goes stale silently -- update it too.
+      FEDMASTER_RELYINGPARTYCONFIGS_0_KEYCONFIG_FILENAME: "keys/ref-rp-local-es-sig-pubkey.pem"
+      FEDMASTER_RELYINGPARTYCONFIGS_0_KEYCONFIG_KEYID: "TWuLB_S4B5VbXNopLrUZ3P-sIrP14p0nyKW5G34nNAM"
+      FEDMASTER_RELYINGPARTYCONFIGS_0_KEYCONFIG_USE: "sig"
 
   gsi-server:
     image: local/idm/gsi-server:8.4.2 # tag produced by the build in docs/local-federation.md; check it matches your checkout
@@ -67,6 +112,13 @@ services:
     ports:
       - "8443:8443" # https -> gsi-fedmaster
       - "8445:8445" # https -> gsi-server
+      # https -> this relying party's own dev server, running on the HOST (not a
+      # container) via `tests/integration/local_federation_settings.py` -- see
+      # docker/local-federation/nginx.conf's fourth vhost, which forwards to
+      # `host.docker.internal:8000`. Podman's gvproxy resolves `host.docker.internal`
+      # from inside a container automatically; no `extra_hosts` entry was needed
+      # (verified: `podman exec ... getent hosts host.docker.internal`).
+      - "8447:8447"
     volumes:
       - ./docker/local-federation/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./.local-federation/server.pem:/certs/server.pem:ro

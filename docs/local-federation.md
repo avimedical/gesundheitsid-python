@@ -225,18 +225,108 @@ uv run pytest -m integration
 These are excluded from a normal `uv run pytest` (see `pytest.ini`) and skip -- never fail --
 when the federation is not running.
 
-## Running the CLI against it
+## Registering our relying party
 
-Once `gsi-server` answers on 8085, generate your own relying-party keys and point them at
-the local federation:
+Verified end to end 2026-08-20. gematik's reference repo ships exactly one pre-registered
+relying party ("GRAS"), and only its PUBLIC key (`ref-gras-pubkey.pem`) -- there is no
+private half anywhere in the checkout, so it cannot be reused. Registering our own means
+generating our own keypairs and telling `gsi-fedmaster` to trust the public half instead.
+
+### 1. Generate keys
 
 ```shell
-uv run gesundheitsid-cli keygen --issuer-uri=https://your-rp.local.test --out-dir=./secrets
+uv run gesundheitsid-cli keygen --issuer-uri=https://rp.gsi.test:8447 --out-dir=.local-federation/rp
 ```
 
-Registering your RP with the local `gsi-fedmaster` (as opposed to gematik's real Federation
-Master) is a matter of adding an `ISSUER_RP_01`-style entry pointing at your RP's own
-locally-served entity statement -- see `gsi-fedmaster/src/main/resources/application.yml`
-in the cloned repo for the exact `relyingPartyConfigs` shape. `gesundheitsid-cli fedreg`
-itself always targets gematik's real Federation Master process (the email workflow); it has
-no local-federation mode.
+Prints the ES-signing key's `kid` and public PEM -- keep both; the next step needs them.
+`.local-federation/` is gitignored (verify with `git check-ignore -v .local-federation/rp/anything`
+before generating anything) -- nothing under it is ever committed.
+
+### 2. Rebuild `gsi-fedmaster` with our public key baked in
+
+`gsi-fedmaster` loads a registered relying party's key via
+`Thread.currentThread().getContextClassLoader().getResourceAsStream(keyConfig.fileName)`
+(`KeyConfiguration`/gematik's `ResourceReader`) -- i.e. **only** from inside the running
+jar's own classpath. The Dockerfile launches it with `java -jar`, and Spring Boot's
+`JarLauncher` (confirmed by decompiling the built jar's manifest and loader classes) fixes
+the classpath to the jar's own nested archives; `loader.path`/`PropertiesLauncher`-style
+extra locations are not consulted. **A bind-mounted key file is invisible to it, no matter
+where you mount it** -- there is no shortcut around a rebuild here, only two real options:
+switch the container's entrypoint to `PropertiesLauncher` with `LOADER_PATH` (more moving
+parts, unverified), or rebuild the image with the key inside it (what we did, since this
+project already has a documented Maven recipe for exactly that from the `gsi-server`
+`certs_trusted` fix above).
+
+```shell
+CA_PEM=.local-federation/rp/es_sig_pubkey.pem   # derive from the *_jwks.json keygen wrote,
+                                                 # or copy the PEM keygen printed to stdout
+
+cp "$CA_PEM" /path/to/app-gemSekIdp/gsi-fedmaster/src/main/resources/keys/ref-rp-local-es-sig-pubkey.pem
+
+cd /path/to/app-gemSekIdp
+JAVA_HOME=$(/usr/libexec/java_home -v21) PATH="$JAVA_HOME/bin:$PATH"   DOCKER_HOST=unix:///path/to/podman-machine-default-api.sock   mvn -pl gsi-fedmaster -am -Dskip.unittests -Dskip.dockerbuild=false clean package
+
+podman tag local/idm/gsi-fedmaster:8.4.2 docker.io/local/idm/gsi-fedmaster:8.4.2-rp
+```
+
+**`JAVA_HOME` must point at a JDK 21, not whatever `java` resolves to by default.** Building
+with JDK 25 (this machine's default `/usr/bin/java`) fails with dozens of `cannot find
+symbol` errors for Lombok-generated methods (`builder()`, `getX()`, the `@Slf4j` `log`
+field) -- Lombok 1.18.46 (pinned by this checkout) does not fully support JDK 25's
+annotation-processing internals yet. The existing `gsi-server`/`gsi-fedmaster` build
+succeeded previously on this same machine only because JDK 21 was selected at the time; it
+is not recorded in the Maven command itself, so it is easy to silently regress.
+
+Only the PUBLIC key enters the image; retagging as `8.4.2-rp` (not overwriting `8.4.2`)
+keeps it obvious this image is customized and distinct from what gematik's own build
+produces.
+
+### 3. Point `gsi-fedmaster` at it
+
+See `docker-compose.yml`'s `gsi-fedmaster.environment` for the full, commented set of
+`FEDMASTER_RELYINGPARTYCONFIGS_0_*` variables and **the defect they work around**: Spring
+Boot's `@ConfigurationProperties` binder does not merge a `List<T>`-typed property across
+multiple property sources per-element. Setting only
+`FEDMASTER_RELYINGPARTYCONFIGS_0_KEYCONFIG_FILENAME`/`_KEYID` (relying on the shipped
+YAML's own `${ISSUER_RP_01:...}` placeholder for `issuer`, the way `ISSUER_IDP_01` works
+for `identityProviderConfigs`) silently produced
+`RelyingPartyConfig(issuer=null, organizationName=null, keyConfig=KeyConfig(..., use=null,
+...))` -- confirmed via `gsi-fedmaster`'s own `fedMasterConfiguration: ...` startup log
+line -- which then threw a `NullPointerException` inside
+`EntityStatementFederationMemberBuilder.getKey` (`issuer=null`). All five fields
+(`issuer`, `organizationName`, `keyConfig.fileName`, `keyConfig.keyId`, `keyConfig.use`)
+must be set together once any one of them is.
+
+### 4. Run this relying party for real, on the host
+
+```shell
+uv run gesundheitsid-cli keygen --issuer-uri=https://rp.gsi.test:8447 --out-dir=.local-federation/rp
+DJANGO_SETTINGS_MODULE=tests.integration.local_federation_settings uv run python -m django runserver 0.0.0.0:8000
+```
+
+See `tests/integration/local_federation_settings.py`'s module docstring for why this
+exists and is not a production settings module: `gsi-server` fetches our RP's own
+`.well-known/openid-federation` to get our real `jwks` (the fedmaster's subordinate
+statement about us, fetched above, carries only the hardcoded metadata overlay you can see
+in it -- redirect_uris/scope, never keys). `docker-compose.yml`'s `tls-proxy` forwards
+`https://rp.gsi.test:8447` to `host.docker.internal:8000`, which podman's gvproxy resolves
+from inside a container automatically (verified: no `extra_hosts` entry was needed).
+
+### The hardcoded RP metadata limitation
+
+`EntityStatementFederationMemberBuilder.buildMetadataForRelyingParty` hardcodes
+`redirect_uris` and `scope` into the subordinate statement it issues about **any**
+relying party it is configured to vouch for -- our real `GESUNDHEITSID["REDIRECT_URI"]`/
+`SCOPES` are never consulted, and `gsi-server` validates PAR against this hardcoded
+overlay (`RequestValidator.validateParParams` -> `EntityStatementRpVerifier`). So exercising
+PAR against the local federation is only possible with:
+
+- `REDIRECT_URI = "https://redirect.testsuite.gsi"` (one of exactly four hardcoded URIs,
+  the only one meant for exactly this kind of exercise)
+- `SCOPES = ["openid", "urn:telematik:display_name", "urn:telematik:versicherter"]` (the
+  hardcoded scope string, order does not matter)
+
+This means the harness cannot exercise a real browser redirect landing at our own
+`redirect.testsuite.gsi` (it doesn't exist), and cannot exercise the `email` scope (not in
+the hardcoded set) -- see `tests/integration/`'s own docstrings for how the test suite
+works around the first limitation.
