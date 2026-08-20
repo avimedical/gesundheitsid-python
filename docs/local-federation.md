@@ -107,6 +107,12 @@ Findings, in the order they bit:
   fetch. Note also that `gsi-server` advertises `authorization_endpoint` under its configured
   `GSI_SERVER_URL` but leaves `token_endpoint` and `pushed_authorization_request_endpoint` on
   `http://127.0.0.1:8085`, so a PAR call from the host would leave TLS behind.
+  **RESOLVED 2026-08-20**: confirmed by reading `EntityStatementBuilder.buildMetadata()` --
+  `token_endpoint`/`pushed_authorization_request_endpoint` come from `gsi.serverUrlMtls`
+  (`GSI_SERVER_URL_MTLS`), a property genuinely separate from `gsi.serverUrl`
+  (`GSI_SERVER_URL`, which only fixes `authorization_endpoint`). `docker-compose.yml` now
+  sets both to the same `https://idp.gsi.test:8445` nginx vhost; see the "OIDC data plane"
+  section below for the verified resulting entity statement.
 - `mvn` is not installed on this machine; the build was run with a Maven unpacked into a
   scratch directory. Any Maven 3.9.x works.
 
@@ -157,7 +163,14 @@ On success, `docker images` (or `podman images`) should list
 
 ## Running it
 
-From this repository's root:
+First, add the three federation members' names to `/etc/hosts` (once; requires sudo, and is
+deliberately NOT automated by any script here -- see "Hostnames" below for why):
+
+```shell
+echo '127.0.0.1 fedmaster.gsi.test idp.gsi.test rp.gsi.test' | sudo tee -a /etc/hosts
+```
+
+Then, from this repository's root:
 
 ```shell
 uv run python scripts/local_federation_certs.py   # once; throwaway CA for the TLS terminator
@@ -168,13 +181,40 @@ Then, from the host:
 
 ```shell
 CA=.local-federation/ca.pem
-curl --cacert $CA https://localhost:8445/.well-known/openid-federation  # gsi-server
-curl --cacert $CA https://localhost:8443/.well-known/openid-federation  # gsi-fedmaster
+curl --cacert $CA https://idp.gsi.test:8445/.well-known/openid-federation       # gsi-server
+curl --cacert $CA https://fedmaster.gsi.test:8443/.well-known/openid-federation # gsi-fedmaster
 ```
 
 Plain HTTP on 8083/8085 still works and is what the containers use internally; the https ports
 exist because `resolve_trust_chain` refuses non-https issuers, and that refusal is worth keeping
 exactly as production runs it.
+
+### Hostnames
+
+All three federation members (`gsi-fedmaster`, `gsi-server`, and -- once registered -- this
+relying party) are published as `fedmaster.gsi.test`, `idp.gsi.test`, `rp.gsi.test`, not
+`localhost`. `localhost` inside a container is that container's own loopback, not the host's --
+publishing on `localhost:<port>` only ever worked for the trust plane, because the fedmaster
+never calls the IdP and the integration test process itself runs on the host. The OIDC data
+plane does need container-to-container traffic (`gsi-server` fetches the fedmaster's
+`federation_fetch_endpoint`, and our RP's own entity statement), so all three names are wired to
+resolve identically in both places: to `127.0.0.1` on the host via `/etc/hosts`, and to the
+`tls-proxy` container via `networks.default.aliases` on that service in `docker-compose.yml`.
+
+`.test`, not `.local`: `.local` is mDNS/Bonjour territory on macOS, and `mDNSResponder`
+intercepts those lookups -- tried first, it produced intermittent resolution failures that
+looked exactly like federation bugs. `.test` is IANA-reserved for exactly this purpose
+(RFC 6761) and every general-purpose resolver leaves it alone.
+
+**If you recreate `gsi-fedmaster` or `gsi-server` (e.g. after an env var or image change),
+restart `tls-proxy` too:** nginx resolves `proxy_pass` upstream hostnames once, at startup, and
+does not notice a recreated container's new IP on its own -- the symptom is a `502 Bad Gateway`
+from a service that is actually up and healthy underneath.
+
+```shell
+docker compose up -d --force-recreate gsi-server   # or gsi-fedmaster
+docker compose restart tls-proxy
+```
 
 ## Running the integration suite against it
 

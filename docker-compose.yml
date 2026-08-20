@@ -47,6 +47,16 @@ services:
       # configured `serverUrl` verbatim.
       FEDMASTER_SERVER_URL: "https://fedmaster.gsi.test:8443"
       GSI_SERVER_URL: "https://idp.gsi.test:8445"
+      # gsi.serverUrlMtls is a SEPARATE property from gsi.serverUrl -- EntityStatementBuilder.
+      # buildMetadata() derives token_endpoint and pushed_authorization_request_endpoint from
+      # THIS one, not GSI_SERVER_URL above. Left unset, both endpoints are advertised on
+      # http://127.0.0.1:8085 (the property's own default) even though GSI_SERVER_URL correctly
+      # points authorization_endpoint at the https name above -- a real client would resolve a
+      # trust chain over https and then get handed plain-http, unreachable-from-outside PAR/token
+      # endpoints. Same https name/port as GSI_SERVER_URL: nginx's idp.gsi.test vhost fronts the
+      # same gsi-server:8085 for all three endpoints, there is nothing mTLS-specific about the
+      # port on OUR side of the proxy (client-cert enforcement is a step of its own).
+      GSI_SERVER_URL_MTLS: "https://idp.gsi.test:8445"
     depends_on:
       - gsi-fedmaster
 
