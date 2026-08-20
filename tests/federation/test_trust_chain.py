@@ -3,14 +3,16 @@ Federation Master trust anchor, and a distinct TrustChainError per failure mode.
 
 from __future__ import annotations
 
+import time
+
 import httpx
 import pytest
 
-from gesundheitsid.crypto import public_jwks, sign_compact
+from gesundheitsid.crypto import KeyPurpose, generate_p256_key, public_jwks, sign_compact
 from gesundheitsid.errors import TrustChainError
 from gesundheitsid.federation.fedmaster import FederationMasterClient
 from gesundheitsid.federation.trust_chain import resolve_trust_chain
-from tests.federation.conftest import FakeFederation, FederationRoutes, entity_statement_claims
+from tests.federation.conftest import LEAF_ISSUER, FakeFederation, FederationRoutes, entity_statement_claims
 
 
 def _client(fake_federation: FakeFederation) -> FederationMasterClient:
@@ -220,3 +222,111 @@ def test_now_injection_is_deterministic_no_sleep_required(
     # just inside the validity window -- must succeed without ever touching real time
     chain = _resolve(fake_federation, now=fake_federation.subordinate_exp - 1)
     assert chain.subject == fake_federation.leaf_issuer
+
+
+# --------------------------------------------------------------------------------------
+# signed_jwks_uri -- see trust_chain.py's module docstring for why this exists: a real
+# sectoral IdP's actual id_token-signing key lives here, never in the subordinate
+# statement's own jwks (that key only ever signs the entity statement/configuration).
+# --------------------------------------------------------------------------------------
+
+SIGNED_JWKS_URL = f"{LEAF_ISSUER}/signed-jwks"
+
+
+def _leaf_entity_configuration_with_signed_jwks_uri(fake_federation: FakeFederation) -> str:
+    claims = entity_statement_claims(
+        iss=fake_federation.leaf_issuer,
+        sub=fake_federation.leaf_issuer,
+        jwks=public_jwks([fake_federation.leaf_key]),
+        authority_hints=[fake_federation.fm_base_url],
+        metadata={"openid_provider": {"issuer": fake_federation.leaf_issuer, "signed_jwks_uri": SIGNED_JWKS_URL}},
+    )
+    return sign_compact(claims, fake_federation.leaf_key, typ="entity-statement+jwt")
+
+
+def _signed_jwks_token(*, iss: str, keys: list[dict], signing_key) -> str:
+    payload = {"iss": iss, "iat": int(time.time()), "keys": keys}
+    return sign_compact(payload, signing_key, typ="jwk-set+json")
+
+
+def test_signed_jwks_uri_keys_are_folded_into_signing_keys(
+    federation_routes: FederationRoutes, fake_federation: FakeFederation
+) -> None:
+    """The whole point: a real sectoral IdP's id_token-signing key is NOT the subordinate
+    statement's key, and is only reachable this way -- see module docstring."""
+    federation_routes.leaf_entity_configuration(token=_leaf_entity_configuration_with_signed_jwks_uri(fake_federation))
+    federation_routes.fm_entity_configuration()
+    federation_routes.subordinate_statement()
+
+    operational_key = generate_p256_key(KeyPurpose.ENTITY_STATEMENT_SIG)
+    operational_jwk = public_jwks([operational_key])["keys"][0]
+    # signed by subordinate_key -- the key the Federation Master actually vouches for --
+    # not by leaf_key, which is only self-asserted.
+    signed_jwks = _signed_jwks_token(
+        iss=fake_federation.leaf_issuer, keys=[operational_jwk], signing_key=fake_federation.subordinate_key
+    )
+    federation_routes.respx_mock.get(SIGNED_JWKS_URL).mock(return_value=httpx.Response(200, text=signed_jwks))
+
+    chain = _resolve(fake_federation)
+
+    kids = {key["kid"] for key in chain.signing_keys["keys"]}
+    assert operational_key.kid in kids, "signed_jwks_uri's key must be folded into signing_keys"
+    assert fake_federation.subordinate_key.kid in kids, "the subordinate statement's own key must survive too"
+
+
+def test_absent_signed_jwks_uri_leaves_signing_keys_unchanged(
+    federation_routes: FederationRoutes, fake_federation: FakeFederation
+) -> None:
+    """No signed_jwks_uri (every other fixture in this file) must stay a pure no-op."""
+    federation_routes.happy_path()
+
+    chain = _resolve(fake_federation)
+
+    assert chain.signing_keys == public_jwks([fake_federation.subordinate_key])
+
+
+def test_rejects_a_signed_jwks_uri_signed_by_the_wrong_key(
+    federation_routes: FederationRoutes, fake_federation: FakeFederation
+) -> None:
+    federation_routes.leaf_entity_configuration(token=_leaf_entity_configuration_with_signed_jwks_uri(fake_federation))
+    federation_routes.fm_entity_configuration()
+    federation_routes.subordinate_statement()
+
+    operational_jwk = public_jwks([generate_p256_key(KeyPurpose.ENTITY_STATEMENT_SIG)])["keys"][0]
+    # signed by leaf_key -- merely self-asserted, never vouched for by the fedmaster.
+    signed_jwks = _signed_jwks_token(
+        iss=fake_federation.leaf_issuer, keys=[operational_jwk], signing_key=fake_federation.leaf_key
+    )
+    federation_routes.respx_mock.get(SIGNED_JWKS_URL).mock(return_value=httpx.Response(200, text=signed_jwks))
+
+    with pytest.raises(TrustChainError, match="signed_jwks_uri"):
+        _resolve(fake_federation)
+
+
+def test_rejects_a_signed_jwks_uri_with_mismatched_iss(
+    federation_routes: FederationRoutes, fake_federation: FakeFederation
+) -> None:
+    federation_routes.leaf_entity_configuration(token=_leaf_entity_configuration_with_signed_jwks_uri(fake_federation))
+    federation_routes.fm_entity_configuration()
+    federation_routes.subordinate_statement()
+
+    operational_jwk = public_jwks([generate_p256_key(KeyPurpose.ENTITY_STATEMENT_SIG)])["keys"][0]
+    signed_jwks = _signed_jwks_token(
+        iss="https://someone-else.example.com", keys=[operational_jwk], signing_key=fake_federation.subordinate_key
+    )
+    federation_routes.respx_mock.get(SIGNED_JWKS_URL).mock(return_value=httpx.Response(200, text=signed_jwks))
+
+    with pytest.raises(TrustChainError, match="signed_jwks_uri"):
+        _resolve(fake_federation)
+
+
+def test_rejects_an_unreachable_signed_jwks_uri(
+    federation_routes: FederationRoutes, fake_federation: FakeFederation
+) -> None:
+    federation_routes.leaf_entity_configuration(token=_leaf_entity_configuration_with_signed_jwks_uri(fake_federation))
+    federation_routes.fm_entity_configuration()
+    federation_routes.subordinate_statement()
+    federation_routes.respx_mock.get(SIGNED_JWKS_URL).mock(side_effect=httpx.ConnectError("connection refused"))
+
+    with pytest.raises(TrustChainError, match="could not fetch signed_jwks_uri"):
+        _resolve(fake_federation)

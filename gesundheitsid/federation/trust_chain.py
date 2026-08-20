@@ -17,6 +17,18 @@ shapes (non-https, userinfo, query, fragment), but that is not an SSRF defence o
 validate `idp_iss` against `FederationMasterClient.list_idps()` before calling this.**
 That list is the federation's own allowlist, it is signed by the Federation Master, and
 it is the only thing that actually constrains where this function will connect.
+
+`signed_jwks_uri` (found against a real sectoral IdP, not anticipated by any fixture):
+`metadata.openid_provider.signed_jwks_uri` names a SEPARATE endpoint serving a JWT (typ
+`jwk-set+json`) whose payload is a JWKS of the IdP's *operational* keys -- confirmed
+against a real gsi-server, its actual id_token-signing key (`kid=puk_fed_idp_token`) is
+NOT the key in the subordinate statement's own `jwks` (`kid=puk_idp_sig`, which only
+signs the entity statement/entity configuration themselves). Without fetching and
+verifying `signed_jwks_uri`, `parse_id_token` cannot verify a real id_token at all --
+every key it would try comes from the wrong keyset. The JWT at `signed_jwks_uri` is
+itself signed by the subordinate statement's key (`puk_idp_sig` in the example above),
+which is what makes its payload trustworthy without yet another out-of-band pin: it is
+one more hop of the same chain, not a new root.
 """
 
 from __future__ import annotations
@@ -27,8 +39,8 @@ from urllib.parse import urlsplit
 
 import httpx
 
-from gesundheitsid.crypto import plain_client
-from gesundheitsid.errors import EntityStatementError, FederationMasterError, TrustChainError
+from gesundheitsid.crypto import load_jwks, plain_client, verify_compact
+from gesundheitsid.errors import CryptoError, EntityStatementError, FederationMasterError, TrustChainError
 from gesundheitsid.federation.entity_statement import verify_self_signed
 from gesundheitsid.federation.fedmaster import FederationMasterClient
 
@@ -41,7 +53,12 @@ class TrustChain:
 
     `signing_keys` and `metadata` come from the Federation Master's subordinate
     statement, not `subject`'s own self-signed entity configuration -- see the module
-    docstring.
+    docstring. `signing_keys` additionally folds in `metadata.openid_provider.
+    signed_jwks_uri`'s keys when the subject publishes one (also documented in the
+    module docstring) -- both are "chain-resolved": the subordinate statement is vouched
+    for directly by the Federation Master, and a `signed_jwks_uri` payload is vouched for
+    by the subordinate statement's own key, never by anything the subject merely asserts
+    unverified about itself.
     """
 
     subject: str
@@ -164,8 +181,11 @@ def _resolve(
             f"subordinate statement for '{subject_issuer}' has expired (exp={subordinate.exp}, now={now})"
         )
 
-    # Step 4: keys come from the subordinate statement and ONLY from there -- that is the
-    # property this module exists to enforce (see module docstring).
+    # Step 4: keys come from the subordinate statement -- that is the property this module
+    # exists to enforce (see module docstring) -- PLUS, if the subject publishes one, the
+    # keys from its signed_jwks_uri, verified against the subordinate statement's own key
+    # (see module docstring's `signed_jwks_uri` note for why a real sectoral IdP's actual
+    # id_token-signing key lives there and nowhere else this module ever sees).
     #
     # Metadata is different, and taking it from the subordinate statement alone was wrong.
     # In OpenID Federation the superior's `metadata` is an overlay on top of what the leaf
@@ -175,13 +195,54 @@ def _resolve(
     # configuration. Replacing wholesale therefore produced a TrustChain with no endpoints at
     # all, so PAR had nothing to call. Merge with the superior winning per key, which keeps the
     # superior authoritative wherever it actually says something.
+    metadata = _merge_metadata(self_signed.metadata, subordinate.metadata)
+    signing_keys = _resolve_signing_keys(subordinate.jwks, metadata, client, subject_issuer)
+
     return TrustChain(
         subject=subject_issuer,
         trust_anchor=fm_statement.iss,
-        signing_keys=subordinate.jwks,
-        metadata=_merge_metadata(self_signed.metadata, subordinate.metadata),
+        signing_keys=signing_keys,
+        metadata=metadata,
         expires_at=subordinate.exp,
     )
+
+
+def _resolve_signing_keys(subordinate_jwks: dict, metadata: dict, client: httpx.Client, subject_issuer: str) -> dict:
+    """`subordinate_jwks`, plus the keys from `metadata.openid_provider.signed_jwks_uri`
+    when the subject publishes one -- see the module docstring's `signed_jwks_uri` note.
+
+    Absent `signed_jwks_uri`, returns `subordinate_jwks` unchanged -- every fixture in
+    this project's own unit tests predates this and has no such URI, so this stays a
+    no-op for all of them; it was only ever missing against a REAL sectoral IdP.
+    """
+    provider_metadata = metadata.get("openid_provider") or {}
+    signed_jwks_uri = provider_metadata.get("signed_jwks_uri")
+    if not signed_jwks_uri:
+        return subordinate_jwks
+
+    try:
+        response = client.get(signed_jwks_uri)
+        response.raise_for_status()
+    except httpx.HTTPError as exc:
+        raise TrustChainError(
+            f"could not fetch signed_jwks_uri for '{subject_issuer}' at {signed_jwks_uri}: {exc}"
+        ) from exc
+
+    try:
+        claims = verify_compact(response.text, load_jwks(subordinate_jwks))
+    except CryptoError as exc:
+        raise TrustChainError(f"signed_jwks_uri for '{subject_issuer}' failed verification: {exc}") from exc
+
+    if claims.get("iss") != subject_issuer:
+        raise TrustChainError(
+            f"signed_jwks_uri for '{subject_issuer}' has iss={claims.get('iss')!r}, expected {subject_issuer!r}"
+        )
+
+    extra_keys = claims.get("keys")
+    if not isinstance(extra_keys, list):
+        raise TrustChainError(f"signed_jwks_uri for '{subject_issuer}' payload carries no 'keys' array")
+
+    return {"keys": [*subordinate_jwks.get("keys", []), *extra_keys]}
 
 
 def _merge_metadata(leaf: dict, superior: dict) -> dict:

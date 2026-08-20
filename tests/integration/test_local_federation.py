@@ -82,9 +82,21 @@ def test_trust_chain_resolves_and_yields_usable_idp_metadata(
     assert chain.subject == IDP_URL
     assert chain.trust_anchor == FEDMASTER_URL
 
-    # Keys: strictly the ones the Federation Master vouches for.
+    # Keys: every key the Federation Master vouches for directly (the subordinate
+    # statement's own jwks) is present -- but chain.signing_keys is a real SUPERSET of
+    # it, not equal to it, because gsi-server publishes a signed_jwks_uri (see
+    # trust_chain.py's module docstring). Its own actual id_token-signing key
+    # (kid=puk_fed_idp_token, confirmed against a real token in
+    # tests/integration/test_local_federation_oidc.py) is NOT the subordinate
+    # statement's key (kid=puk_idp_sig) -- an equality assertion here would be actively
+    # wrong about what a real id_token verification needs.
     subordinate = fedmaster_client.fetch_subordinate_statement(IDP_URL)
-    assert chain.signing_keys == subordinate.jwks
+    subordinate_kids = {key["kid"] for key in subordinate.jwks["keys"]}
+    chain_kids = {key["kid"] for key in chain.signing_keys["keys"]}
+    assert subordinate_kids <= chain_kids, "chain.signing_keys must never drop a key the fedmaster vouches for"
+    assert chain_kids > subordinate_kids, (
+        "expected signed_jwks_uri to contribute at least one key beyond the subordinate statement's own"
+    )
 
     # Metadata: the leaf's own endpoints survive the merge...
     provider = chain.metadata["openid_provider"]
