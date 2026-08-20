@@ -20,14 +20,19 @@ services:
       - "8083:8083" # HTTP API / .well-known/openid-federation for the fedmaster entity itself
       - "8183:8183" # actuator health
     environment:
-      # application.yml defaults ISSUER_IDP_01 to 127.0.0.1, unreachable from inside this
-      # container -- point it at gsi-server's compose service name instead.
-      # Must equal gsi-server's own `iss` exactly, or the fedmaster will not vouch for it.
-      # Both are the https URL the TLS terminator publishes, because that is the URL a
-      # host-side validator can actually fetch (see docker/local-federation/nginx.conf).
-      ISSUER_IDP_01: "https://localhost:8445"
+      # `.gsi.test` names (IANA-reserved for local use per RFC 6761 -- unlike `.local`,
+      # which macOS's mDNSResponder intercepts, producing intermittent lookup failures)
+      # resolve to 127.0.0.1 on the host (see /etc/hosts) AND to this same tls-proxy
+      # container inside the compose network (see tls-proxy's `networks.default.aliases`
+      # below) -- the same name works whether the caller is the host test process or
+      # another container, which `localhost` could never do (that's always the caller's
+      # own loopback). Must equal gsi-server's own `iss` exactly, or the fedmaster will
+      # not vouch for it. Both are the https URL the TLS terminator publishes, because
+      # that is the URL any validator -- host or container -- can actually fetch (see
+      # docker/local-federation/nginx.conf).
+      ISSUER_IDP_01: "https://idp.gsi.test:8445"
       # The fedmaster's own `iss`, and what gsi-server puts in `authority_hints`.
-      FEDMASTER_SERVER_URL: "https://localhost:8443"
+      FEDMASTER_SERVER_URL: "https://fedmaster.gsi.test:8443"
 
   gsi-server:
     image: local/idm/gsi-server:8.4.2 # tag produced by the build in docs/local-federation.md; check it matches your checkout
@@ -36,9 +41,12 @@ services:
       - "8085:8085" # entity statement: GET /.well-known/openid-federation
       - "8185:8185" # actuator health
     environment:
-      # Same reasoning as gsi-fedmaster's ISSUER_IDP_01 above, in the other direction.
-      FEDMASTER_SERVER_URL: "https://localhost:8443"
-      GSI_SERVER_URL: "https://localhost:8445"
+      # Same reasoning as gsi-fedmaster's ISSUER_IDP_01 above, in the other direction --
+      # and this value must be byte-identical to gsi-fedmaster's own FEDMASTER_SERVER_URL,
+      # since the fedmaster compares an incoming fetch request's `iss` against its own
+      # configured `serverUrl` verbatim.
+      FEDMASTER_SERVER_URL: "https://fedmaster.gsi.test:8443"
+      GSI_SERVER_URL: "https://idp.gsi.test:8445"
     depends_on:
       - gsi-fedmaster
 
@@ -53,6 +61,18 @@ services:
       - ./docker/local-federation/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./.local-federation/server.pem:/certs/server.pem:ro
       - ./.local-federation/server.key:/certs/server.key:ro
+    networks:
+      # A container reaching this proxy (gsi-server fetching the fedmaster's
+      # federation_fetch_endpoint, or fetching our RP's own entity statement) needs
+      # these three names to resolve to THIS container on the compose network, exactly
+      # as they resolve to 127.0.0.1 -> this container's published ports on the host.
+      # Without this, only the host side of docker-compose.yml's hostnames would work,
+      # which is precisely the localhost-inside-a-container trap this step exists to fix.
+      default:
+        aliases:
+          - fedmaster.gsi.test
+          - idp.gsi.test
+          - rp.gsi.test
     depends_on:
       - gsi-fedmaster
       - gsi-server

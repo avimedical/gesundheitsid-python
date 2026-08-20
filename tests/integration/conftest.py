@@ -32,8 +32,15 @@ from gesundheitsid.storage import InMemoryStore
 #: The https URLs the TLS terminator publishes. gematik's services speak plain HTTP, and
 #: `resolve_trust_chain` refuses non-https issuers on purpose -- see
 #: docker/local-federation/nginx.conf for why the fix is a proxy, not a bypass flag.
-FEDMASTER_URL = os.environ.get("GESUNDHEITSID_IT_FEDMASTER_URL", "https://localhost:8443")
-IDP_URL = os.environ.get("GESUNDHEITSID_IT_IDP_URL", "https://localhost:8445")
+#:
+#: `.gsi.test` names, not `localhost` -- these must resolve identically for the host
+#: process running this test suite AND for gsi-server/gsi-fedmaster fetching each other
+#: and our RP from inside their own containers (see docker-compose.yml's network
+#: aliases and /etc/hosts). `.local` was tried first and rejected: macOS's mDNSResponder
+#: intercepts `.local` lookups, producing intermittent failures indistinguishable from a
+#: real federation bug. `.test` is IANA-reserved for exactly this (RFC 6761).
+FEDMASTER_URL = os.environ.get("GESUNDHEITSID_IT_FEDMASTER_URL", "https://fedmaster.gsi.test:8443")
+IDP_URL = os.environ.get("GESUNDHEITSID_IT_IDP_URL", "https://idp.gsi.test:8445")
 
 CA_BUNDLE = pathlib.Path(__file__).resolve().parents[2] / ".local-federation" / "ca.pem"
 

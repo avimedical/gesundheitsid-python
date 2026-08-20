@@ -14,7 +14,6 @@ test process that opts in via SSL_CERT_FILE.
 from __future__ import annotations
 
 import datetime
-import ipaddress
 import pathlib
 import sys
 
@@ -71,14 +70,25 @@ def main() -> int:
     server_key = ec.generate_private_key(ec.SECP256R1())
     server_cert = (
         x509.CertificateBuilder()
-        .subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "localhost")]))
+        .subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "gsi.test")]))
         .issuer_name(ca_name)
         .public_key(server_key.public_key())
         .serial_number(x509.random_serial_number())
         .not_valid_before(now - datetime.timedelta(minutes=5))
         .not_valid_after(now + datetime.timedelta(days=VALIDITY_DAYS))
         .add_extension(
-            x509.SubjectAlternativeName([x509.DNSName("localhost"), x509.IPAddress(ipaddress.ip_address("127.0.0.1"))]),
+            # `.gsi.test` -- not `.local` -- names: see docker-compose.yml's top comment
+            # on ISSUER_IDP_01 for why (macOS mDNSResponder intercepts `.local` lookups;
+            # `.test` is IANA-reserved for exactly this, per RFC 6761). One server
+            # certificate covers all three names because one nginx TLS terminator (see
+            # docker/local-federation/nginx.conf) fronts all three vhosts.
+            x509.SubjectAlternativeName(
+                [
+                    x509.DNSName("fedmaster.gsi.test"),
+                    x509.DNSName("idp.gsi.test"),
+                    x509.DNSName("rp.gsi.test"),
+                ]
+            ),
             critical=False,
         )
         .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
