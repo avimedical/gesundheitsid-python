@@ -225,6 +225,14 @@ uv run pytest -m integration
 These are excluded from a normal `uv run pytest` (see `pytest.ini`) and skip -- never fail --
 when the federation is not running.
 
+13 tests as of 2026-08-20: 7 trust-plane (`test_local_federation.py`, unaffected by
+anything below) + 6 OIDC data-plane (`test_local_federation_oidc.py`, which additionally
+needs this relying party registered -- see "Registering our relying party" below -- and
+skip on their own, distinctly from the trust-plane tests, when it is not). One of the six
+(the expired-`request_uri` negative case) genuinely takes about 90 real seconds -- see its
+own docstring for why that cost cannot be engineered away without contradicting another
+test's assertion on the documented TTL.
+
 ## Registering our relying party
 
 Verified end to end 2026-08-20. gematik's reference repo ships exactly one pre-registered
@@ -399,3 +407,55 @@ certificate it claims to, and that our entity statement's x5c matches it -- it d
 prove gematik's real production TLS stack (which terminates TLS itself, not behind an
 nginx proxy under our control) would accept a `self_signed_tls_client_auth` handshake from
 us.
+
+## The OIDC data plane, run for the first time (2026-08-20)
+
+PAR -> authorization -> token exchange -> encrypted ID token had never run against a real
+counterparty before this; `tests/oidc/test_par.py`/`test_token.py` mock `httpx.Client()`
+directly, never `gesundheitsid.crypto.mtls.mtls_client`, so no real mTLS handshake had
+ever completed. Getting a full login to work against the real `gsi-server` found three
+more defects, none of them visible to any respx-mocked test because every one of those
+fixtures agrees with the code that builds it by construction:
+
+1. **`decrypt_id_token` rejected every real id_token.** gemSpec_IDP_Sek's `version` JWE
+   header extension (e.g. `"2.0.0"`) is not in RFC 7516's registered header set, and
+   joserfc's default `JWERegistry` rejects any header parameter it does not know:
+   `UnsupportedHeaderError: Unsupported {'version'} in header`. Fixed in
+   `gesundheitsid/crypto/jose.py` by registering `version` as a known, tolerated (not
+   parsed, not enforced) header parameter.
+2. **`TrustChain.signing_keys` never contained gsi-server's actual id_token-signing
+   key.** The subordinate statement's key (`kid=puk_idp_sig`) only ever signs the entity
+   statement/configuration; the real id_token's inner JWS is signed with a different key
+   entirely (`kid=puk_fed_idp_token`), published at a separate
+   `metadata.openid_provider.signed_jwks_uri` endpoint this project never fetched.
+   `parse_id_token` would have failed signature verification against every real sectoral
+   IdP, not just this one. Fixed in `gesundheitsid/federation/trust_chain.py`:
+   `resolve_trust_chain` now fetches and verifies `signed_jwks_uri` (itself signed by the
+   subordinate statement's key -- one more hop of the same chain, not a new trust root)
+   and folds its keys into `signing_keys`.
+3. **`verify_compact` rejected a real, x5c-bearing JWS header outright.** joserfc's
+   default JWS header-size cap (512 bytes) is smaller than a single base64-encoded X.509
+   certificate. Fixed by raising `verify_compact`'s cap to 8 KiB.
+
+None of these three were config or docker-compose issues -- they are genuine defects in
+`gesundheitsid`'s own code, fixed there, each with its own commit and its own unit test
+coverage (`tests/federation/test_trust_chain.py`'s 5 new `signed_jwks_uri` tests). See
+`tests/integration/test_local_federation_oidc.py` for the 6 tests now covering this path
+end to end (a happy path through a decrypted, verified, `acr`-checked identity; PAR
+without a client certificate; a wrong `code_verifier`; a replayed authorization code; and
+the request_uri TTL, both asserted and exercised to genuine expiry).
+
+**What this harness still does not cover**, honestly:
+
+- A real browser redirect landing at `redirect.testsuite.gsi`, or the `email` scope --
+  both blocked by the fedmaster's hardcoded RP metadata (see above); there is no local
+  workaround.
+- The `amr`/claims/App2App QR-code paths `FedIdpController` also implements
+  (`device_type`/`app_version` claims endpoints, the landing-page HTML) -- untouched,
+  since the test-only `user_id` shortcut bypasses all of it.
+- Real TLS client-certificate authentication end to end -- see the client-certificate
+  section above's own honesty note: this is nginx-forwarded header comparison, not a
+  real mTLS handshake gsi-server itself terminates.
+- Token refresh, logout, or anything past the first id_token -- `access_token` here is
+  gsi-server's own literal `"TODO ACCESS_TOKEN"` placeholder; there is nothing downstream
+  of the id_token in gematik's reference implementation to exercise yet.
