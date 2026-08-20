@@ -14,7 +14,9 @@ from collections.abc import Iterable
 
 from joserfc import jwe, jws
 from joserfc.errors import JoseError
+from joserfc.jwe import JWERegistry
 from joserfc.jwk import ECKey, KeySet
+from joserfc.registry import HeaderParameter
 from joserfc.util import to_bytes, urlsafe_b64decode
 
 from gesundheitsid.errors import CryptoError
@@ -81,6 +83,20 @@ def encrypt_id_token(inner_jws: str, recipient_public_key: ECKey) -> str:
         raise CryptoError(f"failed to encrypt id token: {exc}") from exc
 
 
+#: gemSpec_IDP_Sek's own JWE header extension carrying the id_token format version (e.g.
+#: "2.0.0") -- not in RFC 7516's registered header set, so joserfc's default JWERegistry
+#: rejects any JWE carrying it as "Unsupported {'version'} in header". Confirmed against a
+#: real gsi-server-issued id_token (see tests/integration/): every one of them carries
+#: this header, so decrypting a real sectoral IdP's token was impossible before this was
+#: registered. `str`-typed and non-critical: this module deliberately does not brand
+#: itself on a particular id_token_version, so the value is neither parsed nor enforced,
+#: only tolerated.
+_JWE_HEADER_REGISTRY = JWERegistry(
+    algorithms=[_ENC_ALG, _ENC_ENC],
+    header_registry={"version": HeaderParameter("gemSpec_IDP_Sek id_token_version extension", "str")},
+)
+
+
 def decrypt_id_token(jwe_token: str, enc_private_key: ECKey) -> str:
     """Decrypt a sectoral IdP ID token JWE and return the inner JWS compact string.
 
@@ -88,7 +104,7 @@ def decrypt_id_token(jwe_token: str, enc_private_key: ECKey) -> str:
     through `verify_compact` before trusting any claim inside it.
     """
     try:
-        obj = jwe.decrypt_compact(jwe_token, enc_private_key, algorithms=[_ENC_ALG, _ENC_ENC])
+        obj = jwe.decrypt_compact(jwe_token, enc_private_key, registry=_JWE_HEADER_REGISTRY)
     except JoseError as exc:
         raise CryptoError(f"failed to decrypt id token: {exc}") from exc
 
