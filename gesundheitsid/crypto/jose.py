@@ -16,6 +16,7 @@ from joserfc import jwe, jws
 from joserfc.errors import JoseError
 from joserfc.jwe import JWERegistry
 from joserfc.jwk import ECKey, KeySet
+from joserfc.jws import JWSRegistry
 from joserfc.registry import HeaderParameter
 from joserfc.util import to_bytes, urlsafe_b64decode
 
@@ -36,6 +37,17 @@ _SIG_ALGORITHMS = ["ES256"]
 #: the only key-management/content-encryption pair the sectoral IdP envelope uses
 _ENC_ALG = "ECDH-ES"
 _ENC_ENC = "A256GCM"
+
+#: joserfc's default JWSRegistry caps a JWS header at 512 bytes -- reasonable as a
+#: generic DoS guard, but far too small for a real sectoral IdP token: gsi-server signs
+#: its id_token with a key whose header carries a full `x5c` certificate chain (a single
+#: certificate alone base64-encodes to over 1000 bytes), and `verify_compact` rejected
+#: every one of them with `ExceededSizeError: Header size exceeds 512 bytes` before this
+#: was raised. 8 KiB comfortably covers a multi-certificate chain while still bounding
+#: the worst case -- this is a generous allowance, not an unbounded one.
+_JWS_MAX_HEADER_LENGTH = 8192
+_JWS_REGISTRY = JWSRegistry(algorithms=_SIG_ALGORITHMS)
+_JWS_REGISTRY.max_header_length = _JWS_MAX_HEADER_LENGTH
 
 
 def sign_compact(payload: dict, key: ECKey, typ: str = "JWT") -> str:
@@ -59,7 +71,7 @@ def verify_compact(token: str, keys: KeySet | ECKey) -> dict:
     attacker choose their own verification algorithm.
     """
     try:
-        obj = jws.deserialize_compact(token, keys, algorithms=_SIG_ALGORITHMS)
+        obj = jws.deserialize_compact(token, keys, registry=_JWS_REGISTRY)
     except JoseError as exc:
         raise CryptoError(f"signature verification failed: {exc}") from exc
 
