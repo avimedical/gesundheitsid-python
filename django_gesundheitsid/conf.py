@@ -121,6 +121,22 @@ class GesundheitsIdSettings:
     trust_anchor_jwks: dict
     downstream_clients: tuple[DownstreamClient, ...]
     pairwise_pepper: str = field(repr=False)
+    #: Explicit override for the Federation Master base URL, bypassing `environment.base_url`.
+    #:
+    #: `environment` stays a closed `TU|RU|PU` enum on purpose -- gematik's three real
+    #: federation environments are the only hosts production config should ever be able to
+    #: reach, and an enum can't drift onto an arbitrary host by typo the way a free-form URL
+    #: setting could. This override exists solely so a local reference federation (see
+    #: `docs/local-federation.md`) can be pointed at from outside that enum; it must be set
+    #: explicitly (there is no environment value that implies it) and `TRUST_ANCHOR_JWKS`
+    #: still pins the key that is trusted at whatever host this resolves to.
+    federation_master_url: str | None = None
+
+    @property
+    def federation_master_base_url(self) -> str:
+        """The Federation Master base URL this relying party actually talks to: the
+        explicit override if one was configured, otherwise `environment.base_url`."""
+        return self.federation_master_url if self.federation_master_url is not None else self.environment.base_url
 
     @functools.cached_property
     def mtls_paths(self) -> tuple[Path, Path]:
@@ -163,6 +179,7 @@ class GesundheitsIdSettings:
         trust_anchor_jwks = _require_jwks(raw, "TRUST_ANCHOR_JWKS")
         downstream_clients = _parse_downstream_clients(raw.get("DOWNSTREAM_CLIENTS", []))
         pairwise_pepper = _require_pairwise_pepper(raw)
+        federation_master_url = _optional_https_url(raw, "FEDERATION_MASTER_URL")
 
         return cls(
             issuer=issuer,
@@ -183,6 +200,7 @@ class GesundheitsIdSettings:
             trust_anchor_jwks=trust_anchor_jwks,
             downstream_clients=downstream_clients,
             pairwise_pepper=pairwise_pepper,
+            federation_master_url=federation_master_url,
         )
 
 
@@ -212,6 +230,20 @@ def _require_str_tuple(mapping: Mapping[str, object], key: str, *, allow_empty: 
 
 def _require_https_url(mapping: Mapping[str, object], key: str) -> str:
     value = _require_str(mapping, key)
+    parts = urlsplit(value)
+    if parts.scheme != "https" or not parts.netloc:
+        raise ImproperlyConfigured(f"{_SETTING_NAME}['{key}'] must be an https URL, got {value!r}")
+    return value
+
+
+def _optional_https_url(mapping: Mapping[str, object], key: str) -> str | None:
+    """Like `_require_https_url`, but returns `None` when `key` is absent -- for settings
+    that must be explicit https URLs *if given at all*, never a silent default."""
+    value = mapping.get(key)
+    if value in (None, ""):
+        return None
+    if not isinstance(value, str):
+        raise ImproperlyConfigured(f"{_SETTING_NAME}['{key}'] must be a string, got {type(value).__name__}")
     parts = urlsplit(value)
     if parts.scheme != "https" or not parts.netloc:
         raise ImproperlyConfigured(f"{_SETTING_NAME}['{key}'] must be an https URL, got {value!r}")

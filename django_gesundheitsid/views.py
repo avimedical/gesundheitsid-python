@@ -92,7 +92,9 @@ def _downstream_code_key(code: str) -> str:
 
 
 def _federation_master_client(settings_: GesundheitsIdSettings, store: Store) -> FederationMasterClient:
-    return FederationMasterClient(settings_.environment, trust_anchor_jwks=settings_.trust_anchor_jwks, store=store)
+    return FederationMasterClient(
+        settings_.federation_master_base_url, trust_anchor_jwks=settings_.trust_anchor_jwks, store=store
+    )
 
 
 def _find_downstream_client(settings_: GesundheitsIdSettings, client_id: str) -> DownstreamClient | None:
@@ -150,7 +152,7 @@ def entity_statement(request: HttpRequest) -> HttpResponse:
     token = build_entity_statement(
         issuer=settings_.issuer,
         signing_key=settings_.entity_statement_sig_key,
-        federation_master=settings_.environment.base_url,
+        federation_master=settings_.federation_master_base_url,
         redirect_uris=[settings_.redirect_uri],
         scopes=settings_.scopes,
         client_name=settings_.client_name,

@@ -34,10 +34,11 @@ from gesundheitsid.federation import FederationMasterEnvironment
 from gesundheitsid.oidc.pkce import generate_pkce
 
 # `django_gesundheitsid.views._federation_master_client` builds its `FederationMasterClient`
-# from `settings_.environment` (a `FederationMasterEnvironment`), which resolves to
-# gematik's own real base URL -- there is no configurable override. So the fake federation
-# below is mocked at that real TU base URL, not a made-up one, and `gesundheitsid_settings`
-# always sets `ENVIRONMENT: "TU"` to match.
+# from `settings_.federation_master_base_url`, which defaults to `settings_.environment`'s
+# (a `FederationMasterEnvironment`) real base URL unless `GESUNDHEITSID["FEDERATION_MASTER_URL"]`
+# is set (see `test_conf.py` for that override's own tests). So the fake federation below is
+# mocked at that real TU base URL, not a made-up one, and `gesundheitsid_settings` always sets
+# `ENVIRONMENT: "TU"` to match, leaving `FEDERATION_MASTER_URL` unset.
 FM_BASE_URL = FederationMasterEnvironment.TU.base_url
 IDP_ISSUER = "https://sektoraler-idp.gesundheitsid.invalid"
 RP_ISSUER = "https://relying-party.gesundheitsid.invalid"

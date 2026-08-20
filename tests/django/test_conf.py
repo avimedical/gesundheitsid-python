@@ -22,6 +22,30 @@ def test_valid_settings_parse_successfully(gesundheitsid_settings: dict) -> None
     assert parsed.store_backend.value == "memory"
 
 
+def test_federation_master_base_url_defaults_to_environment_when_no_override(gesundheitsid_settings: dict) -> None:
+    parsed = GesundheitsIdSettings.from_mapping(gesundheitsid_settings)
+    assert parsed.federation_master_url is None
+    assert parsed.federation_master_base_url == parsed.environment.base_url
+
+
+def test_federation_master_url_override_wins_over_environment(gesundheitsid_settings: dict) -> None:
+    overridden = {**gesundheitsid_settings, "FEDERATION_MASTER_URL": "https://fedmaster.local:8443"}
+
+    parsed = GesundheitsIdSettings.from_mapping(overridden)
+
+    assert parsed.federation_master_url == "https://fedmaster.local:8443"
+    assert parsed.federation_master_base_url == "https://fedmaster.local:8443"
+    # the enum itself is untouched -- the override does not silently redefine "TU"
+    assert parsed.environment.value == "TU"
+
+
+def test_federation_master_url_must_be_https_if_given(gesundheitsid_settings: dict) -> None:
+    broken = {**gesundheitsid_settings, "FEDERATION_MASTER_URL": "http://fedmaster.local:8443"}
+
+    with pytest.raises(ImproperlyConfigured, match="FEDERATION_MASTER_URL"):
+        GesundheitsIdSettings.from_mapping(broken)
+
+
 @pytest.mark.parametrize(
     "missing_key",
     [
