@@ -102,6 +102,36 @@ services:
       # same gsi-server:8085 for all three endpoints, there is nothing mTLS-specific about the
       # port on OUR side of the proxy (client-cert enforcement is a step of its own).
       GSI_SERVER_URL_MTLS: "https://idp.gsi.test:8445"
+      # gsi.clientCertRequired defaults to false; left there, self_signed_tls_client_auth
+      # (the whole point of the mTLS client in gesundheitsid/crypto/mtls.py) is never
+      # actually enforced by the counterparty, and this exercise would miss its main
+      # target. DEFECT FOUND: the property's OWN Java field is `clientCertRequired`, and
+      # the task's originally-assumed env var GSI_CLIENTCERTREQUIRED (no separators
+      # between words) does NOT bind to it -- confirmed via GsiServer's own startup
+      # diagnostic (`log.info("GSI_CLIENT_CERT_REQUIRED in env: " +
+      # System.getenv("GSI_CLIENT_CERT_REQUIRED"))`, immediately followed by a log of the
+      # ACTUAL bound `isClientCertRequired`): setting GSI_CLIENTCERTREQUIRED left both
+      # that raw env lookup AND the bound config value showing `false`/`null`. The
+      # underscore-per-word form below is what gematik's own developers use to debug
+      # this exact property, and it is what Spring's relaxed binding actually matches.
+      GSI_CLIENT_CERT_REQUIRED: "true"
+      # DEFECT FOUND: gsi-server calls OUT over https too (the fedmaster's
+      # federation_fetch_endpoint during PAR, and -- once a relying party is registered
+      # -- that relying party's own entity statement), via Java's platform default
+      # SSLContext, which trusts only the JDK's built-in public CA bundle. In gematik's
+      # real environment every counterparty chains to a publicly trusted CA, so this is
+      # invisible; our throwaway CA is not, so those calls failed
+      # `SSLHandshakeException: PKIX path building failed` (confirmed empirically -- and
+      # note it does NOT surface until something actually exercises those calls, i.e.
+      # not until step 4/PAR, well after the trust plane was fully verified working).
+      # `JAVA_TOOL_OPTIONS` is read by any `java` invocation automatically, so this works
+      # without touching the image's fixed `CMD ["java", "-jar", ...]`.
+      JAVA_TOOL_OPTIONS: >-
+        -Djavax.net.ssl.trustStore=/certs/truststore.p12
+        -Djavax.net.ssl.trustStorePassword=changeit
+        -Djavax.net.ssl.trustStoreType=PKCS12
+    volumes:
+      - ./.local-federation/truststore.p12:/certs/truststore.p12:ro
     depends_on:
       - gsi-fedmaster
 
@@ -123,6 +153,9 @@ services:
       - ./docker/local-federation/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./.local-federation/server.pem:/certs/server.pem:ro
       - ./.local-federation/server.key:/certs/server.key:ro
+      # ssl_client_certificate on the idp.gsi.test vhost -- see nginx.conf's comment on
+      # why this doesn't need to actually be an issuer of the RP's mTLS cert.
+      - ./.local-federation/ca.pem:/certs/ca.pem:ro
     networks:
       # A container reaching this proxy (gsi-server fetching the fedmaster's
       # federation_fetch_endpoint, or fetching our RP's own entity statement) needs

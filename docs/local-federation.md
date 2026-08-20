@@ -330,3 +330,72 @@ This means the harness cannot exercise a real browser redirect landing at our ow
 `redirect.testsuite.gsi` (it doesn't exist), and cannot exercise the `email` scope (not in
 the hardcoded set) -- see `tests/integration/`'s own docstrings for how the test suite
 works around the first limitation.
+
+## Turning on client-certificate enforcement
+
+Verified end to end 2026-08-20. `gsi.clientCertRequired` defaults to `false`; left there,
+`self_signed_tls_client_auth` (the whole reason `gesundheitsid/crypto/mtls.py`'s mTLS
+client exists) is never actually enforced by the counterparty, and this whole exercise
+would miss its main target.
+
+**The env var is `GSI_CLIENT_CERT_REQUIRED`, not `GSI_CLIENTCERTREQUIRED`.** Confirmed via
+`GsiServer`'s own startup diagnostic (`log.info("GSI_CLIENT_CERT_REQUIRED in env: " +
+System.getenv("GSI_CLIENT_CERT_REQUIRED"))`, immediately followed by a log of the actual
+bound `isClientCertRequired`): the no-separator form left both the raw env lookup and the
+bound config value `false`/`null`. The underscore-per-word form is what gematik's own
+developers use to debug this exact property, and it is what Spring's relaxed binding
+actually matches.
+
+Three more things had to be true before a client certificate would actually reach
+`RequestValidator.validateCertificate`, none of them anticipated up front:
+
+1. **`ssl_verify_client optional` rejects the handshake outright on a verification
+   failure.** `RequestValidator.validateCertificate` only byte-compares the presented
+   certificate against the x5c entries in the RP's own entity statement -- it never
+   checks the certificate's issuing CA -- so nginx does not need to (and, since our RP's
+   mTLS certificate is self-signed, cannot) verify it against any CA either. Confirmed
+   empirically: with `ssl_client_certificate` pointed at our throwaway CA and
+   `ssl_verify_client optional`, presenting our (unrelated, self-signed) RP mTLS cert made
+   nginx return its own canned "400 The SSL certificate error" page and never even reach
+   `gsi-server`. Fixed with `ssl_verify_client optional_no_ca` -- request a client
+   certificate, but never fail the handshake over its chain of trust.
+2. **`gsi-server` calls OUT over https too, using Java's platform default trust store,
+   which does not include our throwaway CA.** Fetching the fedmaster's
+   `federation_fetch_endpoint` during PAR, and a registered relying party's own entity
+   statement, both go through `kong.unirest`'s default HTTP client (itself backed by
+   `java.net.http.HttpClient`), which trusts only the JDK's built-in public CA bundle. In
+   gematik's real environment every counterparty chains to a publicly trusted CA, so this
+   is invisible; locally it fails `SSLHandshakeException: PKIX path building failed`. This
+   does not surface until something actually exercises those outbound calls (i.e. not
+   until PAR is attempted -- well after the trust plane, and even RP registration itself,
+   were already verified working). Fixed by importing the throwaway CA into a PKCS12
+   truststore (`scripts/local_federation_certs.py` now writes `.local-federation/
+   truststore.p12` via `keytool -importcert` -- `cryptography`'s own
+   `pkcs12.serialize_key_and_certificates` cannot produce a JVM-loadable *trust* store on
+   its own; a bare `cas=[...]` argument embeds certificates as part of a key's chain,
+   never as a standalone `trustedCertEntry`, confirmed via `keytool -list` reporting "0
+   entries" on such a file) and pointing `gsi-server` at it with
+   `JAVA_TOOL_OPTIONS=-Djavax.net.ssl.trustStore=... -Djavax.net.ssl.trustStorePassword=...
+   -Djavax.net.ssl.trustStoreType=PKCS12` -- read automatically by any `java` invocation,
+   so this needed no change to the image's fixed `CMD ["java", "-jar", ...]`.
+3. `keytool` (part of any JDK) must be on `PATH` when running
+   `scripts/local_federation_certs.py` for step 2 to happen at all -- already a
+   prerequisite for this repository's documented gsi-server/gsi-fedmaster image build, so
+   this adds no new dependency for anyone doing the full data-plane setup. Missing
+   `keytool` degrades gracefully: the script prints a clear message and skips writing the
+   truststore, and the trust-plane-only setup this script has always supported keeps
+   working without a JDK installed at all.
+
+Verified with a raw PAR POST (`curl --cert`/`--key` using our RP's own generated mTLS
+cert): without a client certificate, `gsi-server` now correctly returns
+`{"error":"invalid_request","error_description":"client certificate is missing"}`; with
+one, it returns `201 {"request_uri": "...", "expires_in": 90}`.
+
+**Honest limitation:** this is header-based pseudo-mTLS on the server side (`nginx`
+terminates real TLS and forwards the client's certificate to `gsi-server` via the
+`X-SSL-CERT` header, which `RequestValidator.validateCertificate` URL-decodes and
+byte-compares against our entity statement's x5c). It proves our client presents the
+certificate it claims to, and that our entity statement's x5c matches it -- it does NOT
+prove gematik's real production TLS stack (which terminates TLS itself, not behind an
+nginx proxy under our control) would accept a `self_signed_tls_client_auth` handshake from
+us.

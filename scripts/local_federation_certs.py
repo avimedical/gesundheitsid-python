@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import datetime
 import pathlib
+import shutil
+import subprocess
 import sys
 
 from cryptography import x509
@@ -124,7 +126,76 @@ def main() -> int:
         private=True,
     )
     print(f"wrote ca.pem, server.pem, server.key to {OUT_DIR}")
+
+    _write_java_truststore(OUT_DIR / "ca.pem", OUT_DIR / "truststore.p12")
     return 0
+
+
+#: password for the throwaway PKCS12 truststore below. Not a secret: the store holds
+#: nothing but a public CA certificate that is itself worthless (see module docstring),
+#: and JDK keystores require SOME password to open even for read-only trust operations.
+_TRUSTSTORE_PASSWORD = "changeit"
+
+
+def _write_java_truststore(ca_pem_path: pathlib.Path, out_path: pathlib.Path) -> None:
+    """Import `ca_pem_path` into a PKCS12 file gsi-server's JVM can use as
+    `-Djavax.net.ssl.trustStore`.
+
+    Why this exists: gsi-server calls OUT over https too -- fetching the fedmaster's
+    federation_fetch_endpoint, and (once a relying party is registered) that relying
+    party's own entity statement -- using Java's platform default SSLContext, which
+    trusts only the JDK's built-in public CA bundle. In gematik's real environment every
+    counterparty's certificate chains to a publicly trusted CA, so this is invisible; our
+    throwaway CA is not publicly trusted anywhere, so those calls fail
+    `SSLHandshakeException: PKIX path building failed` against the local federation
+    (confirmed empirically -- this is real gsi-server behavior, not a guess, and it does
+    NOT show up until something actually exercises those outbound calls, i.e. not until
+    PAR is attempted).
+    `cryptography`'s own `pkcs12.serialize_key_and_certificates` cannot produce a
+    JVM-loadable *trust* store on its own: a `cas=[...]` argument with no key/cert only
+    embeds those certificates as part of a key's chain, never as a standalone
+    `trustedCertEntry` -- verified empirically (`keytool -list` reported "0 entries" on
+    such a file). `keytool -importcert` is what actually creates a `trustedCertEntry`.
+
+    Requires a JDK's `keytool` on PATH -- already a prerequisite for this repository's
+    documented gsi-server/gsi-fedmaster image build (see docs/local-federation.md), so
+    this does not add a new dependency for anyone doing the full data-plane setup. Skips
+    (with a clear message, not a hard failure) when `keytool` is unavailable -- the
+    trust-plane-only setup this script has always supported must keep working without a
+    JDK installed at all.
+    """
+    keytool = shutil.which("keytool")
+    if keytool is None:
+        print(
+            "keytool not found on PATH -- skipped writing truststore.p12. "
+            "gsi-server's OUTBOUND https calls (to the fedmaster, and to a registered "
+            "relying party) will fail PKIX validation against this CA until you install "
+            "a JDK and rerun this script; the trust-plane-only setup is unaffected."
+        )
+        return
+    if out_path.exists():
+        out_path.unlink()
+    subprocess.run(
+        [
+            keytool,
+            "-importcert",
+            "-noprompt",
+            "-alias",
+            "gesundheitsid-local-federation-ca",
+            "-file",
+            str(ca_pem_path),
+            "-keystore",
+            str(out_path),
+            "-storetype",
+            "PKCS12",
+            "-storepass",
+            _TRUSTSTORE_PASSWORD,
+        ],
+        check=True,
+        capture_output=True,
+    )
+    out_path.chmod(0o644)  # not a secret -- see _TRUSTSTORE_PASSWORD's own comment
+    print(f"wrote {out_path.name} to {out_path.parent} (password: {_TRUSTSTORE_PASSWORD})")
 
 
 if __name__ == "__main__":
