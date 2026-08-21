@@ -8,11 +8,16 @@ sections before opening a PR that touches trust-chain, JOSE, or mTLS code.
 ## Dev setup
 
 ```shell
-uv sync
+uv sync --extra django
 ```
 
-This installs both packages (`gesundheitsid`, `gesundheitsid_cli`) in editable mode
-plus the dev dependency group (pytest, ruff, respx, pip-licenses).
+This installs all three import packages (`gesundheitsid`, `gesundheitsid_cli`,
+`django_gesundheitsid`) in editable mode plus the dev dependency group (pytest, ruff,
+respx, pip-licenses). The `django` extra pulls in Django/Authlib/django-redis; without
+it, `pytest.ini`'s `DJANGO_SETTINGS_MODULE` still points at `tests/django/settings.py`,
+so every `tests/django/*` test collection-errors on a missing `django` module. The core
+`gesundheitsid` package itself stays usable without the extra either way -- see
+`pyproject.toml`'s `[project.optional-dependencies]` comment.
 
 ### Quality gate
 
