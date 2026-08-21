@@ -1,6 +1,6 @@
 [project]
 name = "gesundheitsid"
-version = "0.1.0"
+version = "0.2.0"
 description = "OpenID Federation relying party for Germany's GesundheitsID (gematik TI-Föderation)"
 readme = "README.md"
 requires-python = ">=3.14"
