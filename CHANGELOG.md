@@ -3,13 +3,18 @@
 All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
-this project intends to adhere to [Semantic Versioning](https://semver.org/) once a
-first release is tagged.
+this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-Nothing has shipped yet -- there is no tagged release, and no version below is a claim
-that one exists. This section describes what is implemented on `main` today.
+## [0.1.0] - 2026-08-21
+
+First public release. The library implements the relying-party half of gematik's
+TI-Foederation end to end, and its OIDC data plane has been exercised against gematik's
+own reference sectoral IdP rather than against mocks alone. It has not yet been
+registered with a gematik Federation Master in TU, RU or PU, so treat it as alpha: the
+wire contracts below are verified, the production operating experience behind them is
+not.
 
 ### Added
 
@@ -92,4 +97,5 @@ themselves:
 - PAR and token endpoints reject a non-object JSON body (list/scalar) with a
   `ProtocolError` instead of raising a bare `AttributeError`.
 
-[Unreleased]: https://github.com/avimedical/gesundheitsid-python/commits/main
+[Unreleased]: https://github.com/avimedical/gesundheitsid-python/compare/v0.1.0...main
+[0.1.0]: https://github.com/avimedical/gesundheitsid-python/releases/tag/v0.1.0
