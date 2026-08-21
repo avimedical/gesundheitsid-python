@@ -153,7 +153,12 @@ jobs:
       #   4. A Vault secret-engine path, which would reveal internal infra layout.
       #
       # Only tracked files are scanned (git ls-files), so .venv/, __pycache__/ and other
-      # gitignored local build output can never trip this gate.
+      # gitignored local build output can never trip this gate. This workflow file
+      # itself is excluded from the scan: it necessarily spells out the patterns below
+      # as literal text (in this comment and in the `check` calls), so scanning it would
+      # make the gate permanently self-trigger on its own documentation -- the kind of
+      # unfixable red that teams "fix" by weakening the check, which is how a gate like
+      # this quietly stops meaning anything.
       - name: Scan tracked files for internal/secret material
         run: |
           set -uo pipefail
@@ -162,23 +167,23 @@ jobs:
           check() {
             description="$1"
             pattern="$2"
-            if git ls-files -z | xargs -0 grep -nIE -- "$pattern" 2>/dev/null; then
+            if git ls-files -z -- . ':!.github/workflows/ci.yaml' | xargs -0 grep -nIE -- "$pattern" 2>/dev/null; then
               echo "::error::${description}"
               failed=1
             fi
           }
 
           check "found PEM private-key material in a tracked file" \
-            -- '-----BEGIN (RSA |EC |ENCRYPTED )?PRIVATE KEY-----'
+            '-----BEGIN (RSA |EC |ENCRYPTED )?PRIVATE KEY-----'
 
           check "found what looks like a JWK private 'd' parameter in a tracked file" \
-            -- '"d"[[:space:]]*:[[:space:]]*"[A-Za-z0-9_-]{20,}"'
+            '"d"[[:space:]]*:[[:space:]]*"[A-Za-z0-9_-]{20,}"'
 
           check "found an internal *.avimedical.priv hostname in a tracked file" \
-            -- '[A-Za-z0-9.-]*\.avimedical\.priv'
+            '[A-Za-z0-9.-]*\.avimedical\.priv'
 
           check "found what looks like a Vault secret-engine path in a tracked file" \
-            -- '(vault://|secret/data/avimedical|secret/avimedical/)'
+            '(vault://|secret/data/avimedical|secret/avimedical/)'
 
           if [ "$failed" -ne 0 ]; then
             echo "One or more OSS hygiene checks failed above -- see the comment on this step for what each pattern guards against."
