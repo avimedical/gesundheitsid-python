@@ -36,6 +36,8 @@ gesundheitsid-cli = "gesundheitsid_cli.__main__:main"
 [project.urls]
 Homepage = "https://github.com/avimedical/gesundheitsid-python"
 Repository = "https://github.com/avimedical/gesundheitsid-python"
+Issues = "https://github.com/avimedical/gesundheitsid-python/issues"
+Changelog = "https://github.com/avimedical/gesundheitsid-python/blob/main/CHANGELOG.md"
 
 [dependency-groups]
 dev = [
