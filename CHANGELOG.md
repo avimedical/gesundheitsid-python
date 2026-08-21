@@ -7,6 +7,35 @@ this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-08-21
+
+First release informed by talking to gematik's real Federation Masters rather than only to a
+local reference federation. Every change below came out of that.
+
+### Added
+
+- `SectoralIdp` now carries `pkv` and `user_type_supported`, and `/api/v1/idps` passes both
+  through. gematik publishes them on every entry in TU, RU and PU, and they were previously
+  parsed away. `pkv` is the one that matters today: 41 of RU's 116 entries and 23 of PU's 129
+  are private insurers, and an insurer picker that cannot tell them apart cannot explain to a
+  privately insured person why their experience differs. They are passed through rather than
+  filtered, because whether to hide, label or ignore them is a product decision.
+- `DEFAULT_TIMEOUT` on `mtls_client()` and `plain_client()`. Neither set a timeout, so every
+  call inherited httpx's default -- a library default rather than a decision. Connect 5s,
+  read 15s, overridable per call.
+- `gesundheitsid-cli fedreg` requests `urn:telematik:email` by default. The scope list is part
+  of the gematik registration, so adding it later means re-submitting; every sectoral IdP
+  sampled in TU and RU advertises it.
+
+### Fixed
+
+- One malformed `idp_list` entry no longer blocks every login. `_parse_idps` raised on any entry
+  missing `iss`/`organization_name`, and the caller uses that same list as its SSRF allowlist,
+  so a single bad row in a 116-entry list would have taken down logins for every insurer rather
+  than the broken one. Bad rows are skipped and logged. An empty result from a non-empty list
+  still raises -- that is gematik changing the entry shape, not one bad row, and silently
+  returning nothing would reject every login with a message pointing at the wrong cause.
+
 ## [0.1.0] - 2026-08-21
 
 First public release. The library implements the relying-party half of gematik's
@@ -97,5 +126,6 @@ themselves:
 - PAR and token endpoints reject a non-object JSON body (list/scalar) with a
   `ProtocolError` instead of raising a bare `AttributeError`.
 
-[Unreleased]: https://github.com/avimedical/gesundheitsid-python/compare/v0.1.0...main
+[Unreleased]: https://github.com/avimedical/gesundheitsid-python/compare/v0.2.0...main
+[0.2.0]: https://github.com/avimedical/gesundheitsid-python/releases/tag/v0.2.0
 [0.1.0]: https://github.com/avimedical/gesundheitsid-python/releases/tag/v0.1.0
