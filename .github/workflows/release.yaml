@@ -47,6 +47,33 @@ jobs:
       - name: Build both packages
         run: uv build
 
+      # A GitHub Release is cut by hand and `version` in pyproject.toml is static, so
+      # nothing links the two. Tagging v0.2.0 while pyproject.toml still says 0.1.0 builds
+      # gesundheitsid-0.1.0 and uploads it under a release announcing 0.2.0. Neither
+      # outcome is recoverable: PyPI refuses a duplicate filename, and it never allows a
+      # filename to be reused even after the release is deleted -- so a wrong version
+      # burns that version number permanently. Compare the tag against the version
+      # actually baked into the built artifact rather than against pyproject.toml, so a
+      # hatchling misconfiguration cannot slip past this check either.
+      - name: Verify the release tag matches the built version
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          expected="${RELEASE_TAG#v}"
+          sdist=$(find dist -maxdepth 1 -name 'gesundheitsid-*.tar.gz' -print -quit)
+          if [ -z "$sdist" ]; then
+            echo "::error::no gesundheitsid sdist found in dist/ -- did 'uv build' change its output layout?"
+            exit 1
+          fi
+          built=$(basename "$sdist" .tar.gz)
+          built="${built#gesundheitsid-}"
+          if [ "$built" != "$expected" ]; then
+            echo "::error::release tag '${RELEASE_TAG}' implies version '${expected}', but the build produced '${built}' ([project].version in pyproject.toml). Bump pyproject.toml, then delete this release and its tag and cut it again -- PyPI filenames can never be reused, so publishing a mismatched version is permanent."
+            exit 1
+          fi
+          echo "release tag ${RELEASE_TAG} matches built version ${built}"
+
       # NOTE for the first release: trusted publishing must be configured on the PyPI
       # side *before* this step will succeed. This repo publishes exactly ONE PyPI
       # project, "gesundheitsid" -- its single wheel bundles the gesundheitsid,
