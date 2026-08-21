@@ -48,12 +48,16 @@ jobs:
         run: uv build
 
       # NOTE for the first release: trusted publishing must be configured on the PyPI
-      # side *before* this step will succeed. For each of the two projects (gesundheitsid
-      # and gesundheitsid_cli), go to the project's PyPI page -> Publishing -> Add a new
-      # publisher, and register: owner "avimedical", repository "gesundheitsid-python",
-      # workflow name "release.yaml", environment "pypi". If the project does not exist
-      # on PyPI yet, PyPI also supports "pending publisher" registration ahead of the
-      # first upload -- create that instead of minting an API token as a workaround.
+      # side *before* this step will succeed. This repo publishes exactly ONE PyPI
+      # project, "gesundheitsid" -- its single wheel bundles the gesundheitsid,
+      # gesundheitsid_cli and django_gesundheitsid import packages (see ci.yaml's build
+      # job and [tool.hatch.build.targets.wheel] in pyproject.toml), there is no separate
+      # "gesundheitsid_cli" PyPI project to register. Go to that project's PyPI page ->
+      # Publishing -> Add a new publisher, and register: owner "avimedical", repository
+      # "gesundheitsid-python", workflow name "release.yaml", environment "pypi". If the
+      # project does not exist on PyPI yet, PyPI also supports "pending publisher"
+      # registration ahead of the first upload -- create that instead of minting an API
+      # token as a workaround.
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
         with:
