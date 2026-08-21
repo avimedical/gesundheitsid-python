@@ -6,10 +6,17 @@ import ssl
 import stat
 from pathlib import Path
 
+import httpx
 from cryptography.hazmat.primitives.serialization import Encoding, NoEncryption, PrivateFormat
 
 from gesundheitsid.crypto.keys import KeyPurpose, generate_p256_key, generate_self_signed_cert
-from gesundheitsid.crypto.mtls import build_mtls_context, materialize_keypair, mtls_client, plain_client
+from gesundheitsid.crypto.mtls import (
+    DEFAULT_TIMEOUT,
+    build_mtls_context,
+    materialize_keypair,
+    mtls_client,
+    plain_client,
+)
 
 
 def _pem_keypair() -> tuple[bytes, bytes]:
@@ -71,3 +78,29 @@ def test_mtls_client_and_plain_client_use_independent_clients(tmp_path: Path) ->
         # separate httpx.Client instances imply separate connection pools/transports --
         # the mTLS cert must never leak onto the plain client's connections.
         assert with_cert._transport is not without_cert._transport
+
+
+def test_both_clients_carry_an_explicit_timeout(tmp_path: Path) -> None:
+    """httpx's own default is a library default, not a decision. These calls cross the public
+    internet to gematik and to ~130 insurer IdPs inside a request a person is waiting on, so an
+    accidental timeout is a real availability risk."""
+    cert_pem, key_pem = _pem_keypair()
+    cert_path, key_path = materialize_keypair(cert_pem, key_pem, tmp_path / "secrets")
+
+    with mtls_client(cert_path, key_path) as with_cert, plain_client() as without_cert:
+        for client in (with_cert, without_cert):
+            assert client.timeout == DEFAULT_TIMEOUT
+            assert client.timeout.connect == 5.0
+            assert client.timeout.read == 15.0
+
+
+def test_an_explicit_timeout_argument_still_wins(tmp_path: Path) -> None:
+    """The default must be a default, not a ceiling -- a caller facing a slow counterparty has to
+    be able to override it without reaching past the factory into httpx."""
+    cert_pem, key_pem = _pem_keypair()
+    cert_path, key_path = materialize_keypair(cert_pem, key_pem, tmp_path / "secrets")
+    override = httpx.Timeout(1.0)
+
+    with mtls_client(cert_path, key_path, timeout=override) as with_cert, plain_client(timeout=override) as plain:
+        assert with_cert.timeout == override
+        assert plain.timeout == override
