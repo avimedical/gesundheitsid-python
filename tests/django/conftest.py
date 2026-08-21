@@ -163,7 +163,20 @@ def fake_federation() -> FakeFederation:
     )
     subordinate_token = sign_compact(subordinate_claims, fm_signing_key, typ="entity-statement+jwt")
 
-    idps_list_claims = {"idp_entity": [{"iss": IDP_ISSUER, "organization_name": "Test Insurer", "logo_uri": None}]}
+    idps_list_claims = {
+        "idp_entity": [
+            {
+                "iss": IDP_ISSUER,
+                "organization_name": "Test Insurer",
+                "logo_uri": None,
+                # Both fields are present on every entry gematik publishes in TU, RU
+                # and PU -- the fixture carries them so the picker contract is tested
+                # against the real shape.
+                "pkv": False,
+                "user_type_supported": "IP",
+            }
+        ]
+    }
     idps_list_token = sign_compact(idps_list_claims, fm_signing_key, typ="JWT")
 
     return FakeFederation(

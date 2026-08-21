@@ -43,7 +43,15 @@ def test_idps_returns_the_federations_sectoral_idp_list(client, federation_route
     response = client.get(reverse("django_gesundheitsid:idps"))
 
     assert response.status_code == 200
-    assert response.json() == [{"issuer": IDP_ISSUER, "organization_name": "Test Insurer", "logo_uri": None}]
+    assert response.json() == [
+        {
+            "issuer": IDP_ISSUER,
+            "organization_name": "Test Insurer",
+            "logo_uri": None,
+            "pkv": False,
+            "user_type_supported": "IP",
+        }
+    ]
 
 
 def test_idps_surfaces_a_federation_master_failure_as_502(client, federation_routes: FederationRoutes) -> None:

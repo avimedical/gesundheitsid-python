@@ -25,6 +25,7 @@ from gesundheitsid.crypto.keys import (
     public_jwks,
 )
 from gesundheitsid.crypto.mtls import (
+    DEFAULT_TIMEOUT,
     build_mtls_context,
     materialize_keypair,
     mtls_client,
@@ -43,6 +44,7 @@ __all__ = [
     "generate_self_signed_cert",
     "load_jwks",
     "materialize_keypair",
+    "DEFAULT_TIMEOUT",
     "mtls_client",
     "plain_client",
     "private_jwks",

@@ -76,7 +76,15 @@ def test_load_entity_statement_key_rejects_a_missing_file(tmp_path: Path) -> Non
 
 def test_resolve_scopes_falls_back_to_the_documented_default() -> None:
     scopes = _resolve_scopes(None)
-    assert scopes == ["openid", "urn:telematik:display_name", "urn:telematik:versicherter"]
+    assert scopes == [
+        "openid",
+        "urn:telematik:display_name",
+        "urn:telematik:versicherter",
+        # Registered from the start: adding a scope later means re-submitting the
+        # registration to gematik, and an avimedical account cannot be completed
+        # without an e-mail address.
+        "urn:telematik:email",
+    ]
 
 
 def test_resolve_scopes_accepts_repeated_and_comma_separated_flags() -> None:

@@ -73,13 +73,24 @@ def build_mtls_context(cert_path: Path, key_path: Path) -> ssl.SSLContext:
     return context
 
 
+#: Explicit timeout for every outbound call this library makes. httpx's own default is a
+#: library default rather than a decision, and these requests cross the public internet to
+#: gematik and to ~130 insurer IdPs of varying quality, inside a request/response cycle that
+#: a person is waiting on. Connect stays tight because an unreachable host should fail fast;
+#: read is looser because a PAR or token call at a slow insurer is still worth waiting for.
+#: Callers can override by passing `timeout=` to either factory below.
+DEFAULT_TIMEOUT = httpx.Timeout(connect=5.0, read=15.0, write=10.0, pool=5.0)
+
+
 def mtls_client(cert_path: Path, key_path: Path, **kwargs: object) -> httpx.Client:
     """An httpx.Client presenting the mTLS client cert. Sectoral IdP PAR/token calls only."""
     context = build_mtls_context(cert_path, key_path)
+    kwargs.setdefault("timeout", DEFAULT_TIMEOUT)
     return httpx.Client(verify=context, **kwargs)
 
 
 def plain_client(**kwargs: object) -> httpx.Client:
     """An httpx.Client with no client certificate -- the Federation Master, and everything
     else that must never see the mTLS client cert, goes through this one instead."""
+    kwargs.setdefault("timeout", DEFAULT_TIMEOUT)
     return httpx.Client(**kwargs)

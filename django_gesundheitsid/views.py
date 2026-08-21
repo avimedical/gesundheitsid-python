@@ -178,7 +178,16 @@ def idps(request: HttpRequest) -> HttpResponse:
 
     return JsonResponse(
         [
-            {"issuer": idp.issuer, "organization_name": idp.organization_name, "logo_uri": idp.logo_uri}
+            {
+                "issuer": idp.issuer,
+                "organization_name": idp.organization_name,
+                "logo_uri": idp.logo_uri,
+                # Passed through rather than filtered here: whether to hide private insurers,
+                # label them, or show them normally is a product decision, and a library that
+                # silently dropped them would take that decision away from the caller.
+                "pkv": idp.pkv,
+                "user_type_supported": idp.user_type_supported,
+            }
             for idp in sectoral_idps
         ],
         safe=False,
