@@ -12,6 +12,7 @@ effect for these calls, so keep the two call sites on separate clients.
 from __future__ import annotations
 
 import json
+import logging
 import time
 from dataclasses import dataclass
 from enum import StrEnum
@@ -24,6 +25,8 @@ from gesundheitsid.federation.entity_statement import EntityStatement, verify_en
 from gesundheitsid.storage import Store
 
 __all__ = ["FederationMasterEnvironment", "FederationMasterClient", "SectoralIdp"]
+
+_LOG = logging.getLogger(__name__)
 
 #: entity configurations are cached for the shorter of their own exp and this cap
 _ENTITY_CONFIG_CACHE_CAP_SECONDS = 24 * 3600
@@ -56,6 +59,15 @@ class SectoralIdp:
     issuer: str
     organization_name: str
     logo_uri: str | None
+    #: True when this IdP belongs to a private insurer (private Krankenversicherung).
+    #: gematik publishes this per entry and it is worth carrying through: 23 of the 129
+    #: entries in the production list are PKV, so a picker that cannot tell them apart
+    #: cannot explain to a privately insured user why their experience differs.
+    pkv: bool | None
+    #: Which kind of subject the IdP authenticates. Every entry in all three environments
+    #: currently says "IP" (insured person); the field exists at all because the
+    #: TI-Foederation also covers Leistungserbringer identities, which carry other values.
+    user_type_supported: str | None
     raw: dict
 
 
@@ -87,11 +99,24 @@ def _parse_idps(claims: dict) -> list[SectoralIdp]:
                     issuer=entry["iss"],
                     organization_name=entry["organization_name"],
                     logo_uri=entry.get("logo_uri"),
+                    pkv=entry.get("pkv"),
+                    user_type_supported=entry.get("user_type_supported"),
                     raw=entry,
                 )
             )
         except (KeyError, TypeError) as exc:
-            raise FederationMasterError(f"idp_list entry is malformed: {exc}") from exc
+            # One malformed row must not take the whole federation down. The caller uses this
+            # same list as its SSRF allowlist (django_gesundheitsid.views.auth), so raising
+            # here turns a single bad entry in a 100+ entry list into a total login outage for
+            # every insurer, not just the broken one.
+            _LOG.warning("skipping malformed idp_list entry: %s", exc)
+
+    # An empty result from a non-empty list is not one bad row -- it is gematik having changed
+    # the entry shape, and that has to stay loud. Returning [] silently would reject every
+    # login with "issuer is not in the federation", which reads like a config error and would
+    # send someone looking in entirely the wrong place.
+    if entries and not idps:
+        raise FederationMasterError(f"every one of the {len(entries)} idp_list entries was malformed")
     return idps
 
 

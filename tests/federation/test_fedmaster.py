@@ -4,6 +4,7 @@ list_idps's stale-on-failure fallback."""
 from __future__ import annotations
 
 import json
+import logging
 import time
 
 import httpx
@@ -227,3 +228,84 @@ def test_list_idps_raises_when_the_federation_master_is_down_and_there_is_no_cac
 
     with pytest.raises(FederationMasterError):
         client.list_idps()
+
+
+def test_list_idps_carries_pkv_and_user_type_supported(
+    federation_routes: FederationRoutes, fake_federation: FakeFederation
+) -> None:
+    """gematik publishes both fields on every entry in TU, RU and PU. They were previously
+    parsed away, which left the picker unable to tell a privately-insured user why their
+    experience differs (23 of the 129 production entries are PKV)."""
+    federation_routes.fm_entity_configuration()
+    token = _idps_token(
+        fake_federation,
+        [
+            {
+                "iss": "https://private-insurer.example.com",
+                "organization_name": "Private Insurer",
+                "logo_uri": None,
+                "pkv": True,
+                "user_type_supported": "IP",
+            }
+        ],
+    )
+    federation_routes.idps_list(token=token)
+
+    idps = _client(fake_federation).list_idps()
+
+    assert idps[0].pkv is True
+    assert idps[0].user_type_supported == "IP"
+
+
+def test_list_idps_absent_optional_fields_are_none_not_an_error(
+    federation_routes: FederationRoutes, fake_federation: FakeFederation
+) -> None:
+    """Neither field is guaranteed by the spec, only observed in practice -- an entry without
+    them must still be usable rather than dropped."""
+    federation_routes.fm_entity_configuration()
+    token = _idps_token(fake_federation, [{"iss": "https://insurer-a.example.com", "organization_name": "Insurer A"}])
+    federation_routes.idps_list(token=token)
+
+    idps = _client(fake_federation).list_idps()
+
+    assert len(idps) == 1
+    assert idps[0].pkv is None
+    assert idps[0].user_type_supported is None
+
+
+def test_list_idps_skips_one_malformed_entry_instead_of_blocking_every_login(
+    federation_routes: FederationRoutes, fake_federation: FakeFederation, caplog
+) -> None:
+    """The caller uses this list as its SSRF allowlist, so raising on a single bad row would
+    turn one broken insurer into a total login outage for all ~130 of them."""
+    federation_routes.fm_entity_configuration()
+    token = _idps_token(
+        fake_federation,
+        [
+            {"organization_name": "Missing its iss"},  # malformed
+            {"iss": "https://insurer-a.example.com", "organization_name": "Insurer A"},
+            "not even a mapping",  # malformed in a different way
+        ],
+    )
+    federation_routes.idps_list(token=token)
+
+    with caplog.at_level(logging.WARNING, logger="gesundheitsid.federation.fedmaster"):
+        idps = _client(fake_federation).list_idps()
+
+    assert [idp.issuer for idp in idps] == ["https://insurer-a.example.com"]
+    # skipping silently would be its own bug -- an operator has to be able to find out
+    assert sum("skipping malformed idp_list entry" in r.message for r in caplog.records) == 2
+
+
+def test_list_idps_raises_when_every_entry_is_malformed(
+    federation_routes: FederationRoutes, fake_federation: FakeFederation
+) -> None:
+    """A wholly unparseable list is gematik changing the entry shape, not one bad row. Returning
+    [] there would reject every login with 'issuer is not in the federation' -- which reads like
+    a local misconfiguration and sends the reader looking in entirely the wrong place."""
+    federation_routes.fm_entity_configuration()
+    token = _idps_token(fake_federation, [{"wrong": "shape"}, {"also": "wrong"}])
+    federation_routes.idps_list(token=token)
+
+    with pytest.raises(FederationMasterError, match="every one of the 2"):
+        _client(fake_federation).list_idps()
