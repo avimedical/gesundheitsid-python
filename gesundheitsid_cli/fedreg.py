@@ -29,7 +29,18 @@ from gesundheitsid_cli.keygen import public_key_pem
 __all__ = ["add_subparser", "build_registration_xml", "run"]
 
 _ENVIRONMENTS = ("TU", "RU", "PU")
-_DEFAULT_SCOPES = ("openid", "urn:telematik:display_name", "urn:telematik:versicherter")
+# Includes urn:telematik:email deliberately. The scope list is part of what gets registered
+# with gematik, so adding a scope later means re-submitting the registration and a change
+# notification -- not a deploy. An e-mail address is required to finish an avimedical account,
+# and every sectoral IdP sampled in TU and RU (RISE, IBM, DEBEKA, AOK BW) advertises this scope,
+# so the cost of asking for it up front is nil and the cost of omitting it is a re-registration.
+# Requesting a scope an insurer declines to release is harmless: the claim simply does not arrive.
+_DEFAULT_SCOPES = (
+    "openid",
+    "urn:telematik:display_name",
+    "urn:telematik:versicherter",
+    "urn:telematik:email",
+)
 _WIKI_URL = "https://wiki.gematik.de/spaces/IDPKB/pages/544316583/"
 
 # Element order matches RP_register.xsd's <xs:sequence> exactly, fetched while writing this
