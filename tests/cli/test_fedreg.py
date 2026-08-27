@@ -1,5 +1,6 @@
 """fedreg: XML shape/fields, KID/PEM provenance, and each documented validation rule."""
 
+import argparse
 import json
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -10,7 +11,13 @@ from joserfc.jwk import ECKey
 
 from gesundheitsid.crypto import KeyPurpose, generate_p256_key, private_jwks
 from gesundheitsid.errors import GesundheitsIdError
-from gesundheitsid_cli.fedreg import _load_entity_statement_key, _resolve_scopes, build_registration_xml
+from gesundheitsid_cli.fedreg import (
+    _WIKI_URL,
+    _load_entity_statement_key,
+    _resolve_scopes,
+    add_subparser,
+    build_registration_xml,
+)
 
 _ISSUER = "https://gid.example.com"
 
@@ -184,3 +191,23 @@ def test_vfs_bestaetigung_outside_pu_is_a_warning_not_an_error(signing_key: ECKe
     _, warnings = build_registration_xml(**kwargs)
     assert len(warnings) == 1
     assert "PU" in warnings[0]
+
+
+def test_wiki_url_has_no_trailing_slash_because_gematiks_wiki_404s_with_one() -> None:
+    """Every generated registration bakes this URL into its disclaimer, so a trailing slash
+    ships a 404 to whoever at gematik opens the file."""
+    assert not _WIKI_URL.endswith("/")
+
+
+def test_member_id_is_not_a_required_flag_because_gematik_assigns_it() -> None:
+    """gematik assigns the Member-ID and asks for the tag present but empty, so the CLI must
+    parse without --member-id. Asserted on the parser, not on build_registration_xml: the
+    builder always accepted an empty string, so only the argparse layer was ever wrong."""
+    parser = argparse.ArgumentParser()
+    add_subparser(parser.add_subparsers())
+
+    args = parser.parse_args(
+        ["fedreg", "--environment", "TU", "--issuer-uri", _ISSUER, "--contact-email", "a@example.com", "--jwks", "x"]
+    )
+
+    assert args.member_id == ""
