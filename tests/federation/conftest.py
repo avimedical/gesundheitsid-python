@@ -27,12 +27,9 @@ LEAF_ISSUER = "https://leaf-idp.example.com"
 #: how long fixture statements are valid for, in seconds, from their build time
 DEFAULT_LIFETIME_SECONDS = 3600
 
-#: Endpoint paths exactly as gematik's reference Federation Master serves them (verified
-#: against a running gsi-fedmaster 8.4.2). These fixtures previously invented
-#: `/federation/fetch`, `/federation/list` and `/federation/listidps`, which agreed with the
-#: client's own hardcoded guesses and therefore passed while every one of them 404s against a
-#: real Federation Master. Endpoints are DISCOVERED from `metadata.federation_entity` below --
-#: these constants only exist so the fixture serves them where the real thing does.
+#: Endpoint paths exactly as gematik's reference Federation Master serves them (gsi-fedmaster 8.4.2).
+#: These fixtures used to invent paths that agreed with the client's own guesses, so they passed
+#: while 404ing against the real thing. Endpoints are DISCOVERED from metadata.federation_entity.
 FM_FETCH_PATH = "/federation_fetch_endpoint"
 FM_LIST_PATH = "/federation_list"
 FM_IDP_LIST_PATH = "/.well-known/idp_list"

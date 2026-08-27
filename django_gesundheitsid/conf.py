@@ -107,29 +107,16 @@ class GesundheitsIdSettings:
     mtls_tmp_dir: Path
     store_backend: StoreBackend
     cache_alias: str
-    #: Opt out of the startup check that `STORE_BACKEND = "cache"` can pop atomically.
-    #:
-    #: The check exists because the non-atomic fallback in `CacheStore.pop` is not a weaker
-    #: single-use guarantee but none at all: two requests racing on one authorization code both
-    #: receive it. A cache alias that cannot do `GETDEL` is indistinguishable from one that can
-    #: until two logins overlap, so it is refused by default rather than discovered in production.
-    #:
-    #: Set True only where that genuinely does not matter -- a test suite, or a single-threaded
-    #: local run. Never in a deployment serving real logins; use Redis or `STORE_BACKEND =
-    #: "database"` there instead.
+    #: Opt out of the startup check that STORE_BACKEND="cache" can pop atomically. The non-atomic
+    #: fallback is not a weaker single-use guarantee but none at all - two requests racing on one
+    #: authorization code both receive it. Set True only in tests or a single-threaded local run.
     allow_non_atomic_store: bool
     trust_anchor_jwks: dict
     downstream_clients: tuple[DownstreamClient, ...]
     pairwise_pepper: str = field(repr=False)
     #: Explicit override for the Federation Master base URL, bypassing `environment.base_url`.
-    #:
-    #: `environment` stays a closed `TU|RU|PU` enum on purpose -- gematik's three real
-    #: federation environments are the only hosts production config should ever be able to
-    #: reach, and an enum can't drift onto an arbitrary host by typo the way a free-form URL
-    #: setting could. This override exists solely so a local reference federation (see
-    #: `docs/local-federation.md`) can be pointed at from outside that enum; it must be set
-    #: explicitly (there is no environment value that implies it) and `TRUST_ANCHOR_JWKS`
-    #: still pins the key that is trusted at whatever host this resolves to.
+    #: The enum stays closed so production config cannot drift onto an arbitrary host by typo;
+    #: this exists solely for a local reference federation. TRUST_ANCHOR_JWKS still pins the key.
     federation_master_url: str | None = None
 
     @property

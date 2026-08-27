@@ -59,10 +59,8 @@ class SectoralIdp:
     issuer: str
     organization_name: str
     logo_uri: str | None
-    #: True when this IdP belongs to a private insurer (private Krankenversicherung).
-    #: gematik publishes this per entry and it is worth carrying through: 23 of the 129
-    #: entries in the production list are PKV, so a picker that cannot tell them apart
-    #: cannot explain to a privately insured user why their experience differs.
+    #: True for a private insurer (PKV). 23 of the 129 production entries are PKV, so a picker that
+    #: cannot tell them apart cannot explain why a privately insured user's experience differs.
     pkv: bool | None
     #: Which kind of subject the IdP authenticates. Every entry in all three environments
     #: currently says "IP" (insured person); the field exists at all because the
@@ -78,11 +76,9 @@ def _capped_ttl(exp: int, cap_seconds: int) -> int:
     return max(1, min(remaining, cap_seconds))
 
 
-#: Array key in the Federation Master's signed idp_list payload. gematik's reference
-#: Federation Master emits `idp_entity` (verified against a running gsi-fedmaster 8.4.2); this
-#: code previously looked for `idps`, which simply is not there. As with the endpoint paths, the
-#: unit tests could not catch it -- they built the fixture from the same assumption the parser
-#: made.
+#: Array key in the signed idp_list payload, verified against a running gsi-fedmaster 8.4.2. This
+#: code previously looked for `idps`, which is simply not there - and the unit tests could not
+#: catch it, because the fixture was built from the same assumption the parser made.
 _IDP_LIST_ARRAY_KEY = "idp_entity"
 
 
@@ -105,16 +101,12 @@ def _parse_idps(claims: dict) -> list[SectoralIdp]:
                 )
             )
         except (KeyError, TypeError) as exc:
-            # One malformed row must not take the whole federation down. The caller uses this
-            # same list as its SSRF allowlist (django_gesundheitsid.views.auth), so raising
-            # here turns a single bad entry in a 100+ entry list into a total login outage for
-            # every insurer, not just the broken one.
+            # One malformed row must not take the federation down: this same list is the SSRF allowlist
+            # in views.auth, so raising would turn one bad entry into a total outage for every insurer.
             _LOG.warning("skipping malformed idp_list entry: %s", exc)
 
-    # An empty result from a non-empty list is not one bad row -- it is gematik having changed
-    # the entry shape, and that has to stay loud. Returning [] silently would reject every
-    # login with "issuer is not in the federation", which reads like a config error and would
-    # send someone looking in entirely the wrong place.
+    # An empty result from a non-empty list is gematik changing the entry shape, not one bad row.
+    # Returning [] would reject every login with "issuer is not in the federation" - a config error.
     if entries and not idps:
         raise FederationMasterError(f"every one of the {len(entries)} idp_list entries was malformed")
     return idps

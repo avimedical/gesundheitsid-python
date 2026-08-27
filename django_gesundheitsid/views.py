@@ -353,10 +353,8 @@ def auth_callback(request: HttpRequest) -> HttpResponse:
         return _error_response("server_error", f"id_token from the sectoral IdP failed validation: {exc}", status=502)
 
     if not identity.kvnr:
-        # No kvnr claim -> no stable pairwise sub can be derived -> refuse to mint a
-        # downstream identity at all, rather than falling back to something unstable
-        # (a random or session-scoped sub would silently break account binding
-        # downstream). See `_pairwise_subject`'s docstring.
+        # No kvnr claim -> no stable pairwise sub, so refuse rather than fall back to a random or
+        # session-scoped sub, which would silently break account binding downstream.
         return _error_response(
             "server_error",
             "id_token from the sectoral IdP has no kvnr claim; cannot mint a stable identity",
@@ -387,9 +385,7 @@ def auth_callback(request: HttpRequest) -> HttpResponse:
 
 
 # --------------------------------------------------------------------------------------
-# Downstream OIDC provider face (Authlib's JWTBearerClientAssertion for private_key_jwt
-# only -- see this module's docstring)
-# --------------------------------------------------------------------------------------
+# Downstream OIDC provider face (Authlib's JWTBearerClientAssertion, private_key_jwt only).
 
 
 class _PrivateKeyJwtVerifier(JWTBearerClientAssertion):
@@ -545,12 +541,9 @@ def token(request: HttpRequest) -> HttpResponse:
             "aud": client_id,
             "iat": now,
             "exp": now + _DOWNSTREAM_ID_TOKEN_TTL_SECONDS,
-            # A unique id per minted token, so a consumer can enforce single use. Without it,
-            # anything that accepts this id_token as proof of a login accepts it repeatedly for
-            # the whole `exp` window -- the downstream code that produced it is single-use, but
-            # the token it was exchanged for is a bearer artifact and nothing about it says
-            # "already redeemed". avimedical's Keycloak grant rejects a repeated `jti`; any other
-            # consumer needs the claim to be present before it can do the same.
+            # Unique id per minted token so a consumer can enforce single use: the downstream code was
+            # single-use, but the id_token it bought is a bearer artifact that says nothing about having
+            # been redeemed. avimedical's Keycloak grant rejects a repeated jti.
             "jti": generate_state(),
         }
     )
@@ -561,10 +554,8 @@ def token(request: HttpRequest) -> HttpResponse:
 
     return JsonResponse(
         {
-            # Opaque and unverifiable beyond this response -- no resource protector /
-            # userinfo endpoint is in scope here. Present only because RFC 6749 requires
-            # an access_token in a successful token response; the id_token is the actual
-            # payload downstream clients of this relying party care about.
+            # Opaque and unverifiable beyond this response - no resource protector is in scope here.
+            # Present only because RFC 6749 requires one; the id_token is the payload that matters.
             "access_token": generate_state(),
             "token_type": "Bearer",
             "expires_in": _DOWNSTREAM_ID_TOKEN_TTL_SECONDS,

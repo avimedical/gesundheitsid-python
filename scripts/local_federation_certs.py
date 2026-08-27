@@ -79,11 +79,8 @@ def main() -> int:
         .not_valid_before(now - datetime.timedelta(minutes=5))
         .not_valid_after(now + datetime.timedelta(days=VALIDITY_DAYS))
         .add_extension(
-            # `.gsi.test` -- not `.local` -- names: see docker-compose.yml's top comment
-            # on ISSUER_IDP_01 for why (macOS mDNSResponder intercepts `.local` lookups;
-            # `.test` is IANA-reserved for exactly this, per RFC 6761). One server
-            # certificate covers all three names because one nginx TLS terminator (see
-            # docker/local-federation/nginx.conf) fronts all three vhosts.
+            # `.gsi.test`, not `.local`: macOS mDNSResponder intercepts `.local`, and `.test` is
+            # IANA-reserved (RFC 6761). One certificate covers all three names; one nginx fronts them.
             x509.SubjectAlternativeName(
                 [
                     x509.DNSName("fedmaster.gsi.test"),

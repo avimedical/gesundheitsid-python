@@ -73,12 +73,9 @@ def build_mtls_context(cert_path: Path, key_path: Path) -> ssl.SSLContext:
     return context
 
 
-#: Explicit timeout for every outbound call this library makes. httpx's own default is a
-#: library default rather than a decision, and these requests cross the public internet to
-#: gematik and to ~130 insurer IdPs of varying quality, inside a request/response cycle that
-#: a person is waiting on. Connect stays tight because an unreachable host should fail fast;
-#: read is looser because a PAR or token call at a slow insurer is still worth waiting for.
-#: Callers can override by passing `timeout=` to either factory below.
+#: Explicit timeout for every outbound call. These cross the public internet to gematik and ~130
+#: insurer IdPs of varying quality, inside a request a person is waiting on: connect fails fast,
+#: read stays looser because a slow insurer's PAR is still worth waiting for. Override per call.
 DEFAULT_TIMEOUT = httpx.Timeout(connect=5.0, read=15.0, write=10.0, pool=5.0)
 
 
