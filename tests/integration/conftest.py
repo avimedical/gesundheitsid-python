@@ -31,16 +31,9 @@ from gesundheitsid.federation import FederationMasterClient, TrustChain, resolve
 from gesundheitsid.storage import InMemoryStore
 from gesundheitsid_cli.keygen import slug_for
 
-#: The https URLs the TLS terminator publishes. gematik's services speak plain HTTP, and
-#: `resolve_trust_chain` refuses non-https issuers on purpose -- see
-#: docker/local-federation/nginx.conf for why the fix is a proxy, not a bypass flag.
-#:
-#: `.gsi.test` names, not `localhost` -- these must resolve identically for the host
-#: process running this test suite AND for gsi-server/gsi-fedmaster fetching each other
-#: and our RP from inside their own containers (see docker-compose.yml's network
-#: aliases and /etc/hosts). `.local` was tried first and rejected: macOS's mDNSResponder
-#: intercepts `.local` lookups, producing intermittent failures indistinguishable from a
-#: real federation bug. `.test` is IANA-reserved for exactly this (RFC 6761).
+#: The https URLs the TLS terminator publishes - gematik's services speak plain HTTP and
+#: resolve_trust_chain refuses non-https issuers on purpose. `.gsi.test` names so they resolve
+#: identically on the host and in the containers; macOS intercepts `.local`, `.test` is reserved.
 FEDMASTER_URL = os.environ.get("GESUNDHEITSID_IT_FEDMASTER_URL", "https://fedmaster.gsi.test:8443")
 IDP_URL = os.environ.get("GESUNDHEITSID_IT_IDP_URL", "https://idp.gsi.test:8445")
 
@@ -51,19 +44,13 @@ RP_KEYS_DIR = pathlib.Path(__file__).resolve().parents[2] / ".local-federation" 
 #: docs/local-federation.md's "Registering our relying party". Must match
 #: tests/integration/local_federation_settings.py's ISSUER exactly.
 RP_ISSUER = os.environ.get("GESUNDHEITSID_IT_RP_ISSUER", "https://rp.gsi.test:8447")
-#: EntityStatementFederationMemberBuilder.buildMetadataForRelyingParty hardcodes
-#: redirect_uris/scope into the statement it issues about ANY relying party -- these are
-#: not this project's own preferred values, they are the only ones gsi-server will ever
-#: validate a PAR against locally. See docs/local-federation.md's "The hardcoded RP
-#: metadata limitation".
+#: gsi-server hardcodes redirect_uris/scope into the statement it issues about ANY relying party,
+#: so these are the only values it will ever validate a local PAR against - not our preferences.
 REDIRECT_URI = "https://redirect.testsuite.gsi"
 SCOPES = ("openid", "urn:telematik:display_name", "urn:telematik:versicherter")
-#: gsi-server's test-only auth shortcut (`getAuthorizationCode` in FedIdpController)
-#: takes any `[A-Z]\d{9}` "user_id as KVNR or fallback" and mints a real authorization
-#: code for it -- no real authentication happens locally. NOT a real KVNR: it is this
-#: shortcut's own canned test value, fixed and public, never a real insured person's
-#: identifier -- see the module docstring's "Never log a raw KVNR" rule, which this is
-#: not a violation of.
+#: gsi-server's test-only auth shortcut mints a real authorization code for any [A-Z] plus 9 digits.
+#: NOT a real KVNR: it is that shortcut's own canned, public test value, so the "never log a raw
+#: KVNR" rule is not in play here.
 TEST_USER_ID = "X110411675"
 
 

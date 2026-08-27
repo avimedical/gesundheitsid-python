@@ -225,10 +225,8 @@ def test_now_injection_is_deterministic_no_sleep_required(
 
 
 # --------------------------------------------------------------------------------------
-# signed_jwks_uri -- see trust_chain.py's module docstring for why this exists: a real
-# sectoral IdP's actual id_token-signing key lives here, never in the subordinate
-# statement's own jwks (that key only ever signs the entity statement/configuration).
-# --------------------------------------------------------------------------------------
+# signed_jwks_uri: a real sectoral IdP's id_token-signing key lives here, never in the subordinate
+# statement's jwks, which only ever signs the entity statement. See trust_chain.py's docstring.
 
 SIGNED_JWKS_URL = f"{LEAF_ISSUER}/signed-jwks"
 

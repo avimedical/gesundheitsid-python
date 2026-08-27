@@ -181,20 +181,9 @@ def _resolve(
             f"subordinate statement for '{subject_issuer}' has expired (exp={subordinate.exp}, now={now})"
         )
 
-    # Step 4: keys come from the subordinate statement -- that is the property this module
-    # exists to enforce (see module docstring) -- PLUS, if the subject publishes one, the
-    # keys from its signed_jwks_uri, verified against the subordinate statement's own key
-    # (see module docstring's `signed_jwks_uri` note for why a real sectoral IdP's actual
-    # id_token-signing key lives there and nowhere else this module ever sees).
-    #
-    # Metadata is different, and taking it from the subordinate statement alone was wrong.
-    # In OpenID Federation the superior's `metadata` is an overlay on top of what the leaf
-    # publishes about itself, not a replacement for it: gematik's reference Federation Master
-    # returns only `{"openid_provider": {"client_registration_types_supported": ["automatic"]}}`,
-    # while the authorization, token and PAR endpoints live in the IdP's own entity
-    # configuration. Replacing wholesale therefore produced a TrustChain with no endpoints at
-    # all, so PAR had nothing to call. Merge with the superior winning per key, which keeps the
-    # superior authoritative wherever it actually says something.
+    # Keys come from the subordinate statement - the property this module exists to enforce - plus
+    # the subject's signed_jwks_uri when it publishes one. Metadata differs: the superior's is an
+    # OVERLAY, so merge with the superior winning per key; replacing left the chain endpoint-less.
     metadata = _merge_metadata(self_signed.metadata, subordinate.metadata)
     signing_keys = _resolve_signing_keys(subordinate.jwks, metadata, client, subject_issuer)
 

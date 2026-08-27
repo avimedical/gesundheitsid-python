@@ -38,13 +38,9 @@ _SIG_ALGORITHMS = ["ES256"]
 _ENC_ALG = "ECDH-ES"
 _ENC_ENC = "A256GCM"
 
-#: joserfc's default JWSRegistry caps a JWS header at 512 bytes -- reasonable as a
-#: generic DoS guard, but far too small for a real sectoral IdP token: gsi-server signs
-#: its id_token with a key whose header carries a full `x5c` certificate chain (a single
-#: certificate alone base64-encodes to over 1000 bytes), and `verify_compact` rejected
-#: every one of them with `ExceededSizeError: Header size exceeds 512 bytes` before this
-#: was raised. 8 KiB comfortably covers a multi-certificate chain while still bounding
-#: the worst case -- this is a generous allowance, not an unbounded one.
+#: joserfc caps a JWS header at 512 bytes, far too small for a real sectoral IdP token: one
+#: base64 x5c certificate alone exceeds 1000 bytes, and every gsi-server id_token was rejected
+#: with ExceededSizeError before this. 8 KiB covers a multi-cert chain while staying bounded.
 _JWS_MAX_HEADER_LENGTH = 8192
 _JWS_REGISTRY = JWSRegistry(algorithms=_SIG_ALGORITHMS)
 _JWS_REGISTRY.max_header_length = _JWS_MAX_HEADER_LENGTH
@@ -95,14 +91,9 @@ def encrypt_id_token(inner_jws: str, recipient_public_key: ECKey) -> str:
         raise CryptoError(f"failed to encrypt id token: {exc}") from exc
 
 
-#: gemSpec_IDP_Sek's own JWE header extension carrying the id_token format version (e.g.
-#: "2.0.0") -- not in RFC 7516's registered header set, so joserfc's default JWERegistry
-#: rejects any JWE carrying it as "Unsupported {'version'} in header". Confirmed against a
-#: real gsi-server-issued id_token (see tests/integration/): every one of them carries
-#: this header, so decrypting a real sectoral IdP's token was impossible before this was
-#: registered. `str`-typed and non-critical: this module deliberately does not brand
-#: itself on a particular id_token_version, so the value is neither parsed nor enforced,
-#: only tolerated.
+#: gemSpec_IDP_Sek's JWE header carrying the id_token format version. Not in RFC 7516's
+#: registered set, so joserfc rejected every real gsi-server token as "Unsupported {'version'}".
+#: Tolerated, never parsed or enforced - this module does not brand itself on a version.
 _JWE_HEADER_REGISTRY = JWERegistry(
     algorithms=[_ENC_ALG, _ENC_ENC],
     header_registry={"version": HeaderParameter("gemSpec_IDP_Sek id_token_version extension", "str")},

@@ -50,11 +50,8 @@ CA_BUNDLE = BASE_DIR / ".local-federation" / "ca.pem"
 
 ISSUER = "https://rp.gsi.test:8447"
 FEDMASTER_URL = "https://fedmaster.gsi.test:8443"
-#: gematik's reference fedmaster hardcodes this RP metadata for EVERY relying party it
-#: vouches for (EntityStatementFederationMemberBuilder.buildMetadataForRelyingParty) --
-#: our real redirect_uris/scopes are never consulted, so PAR against the local federation
-#: only ever validates against exactly these. See docs/local-federation.md's "OIDC data
-#: plane" section.
+#: gematik's reference fedmaster hardcodes this RP metadata for EVERY relying party it vouches
+#: for, so our real redirect_uris/scopes are never consulted and local PAR validates only on these.
 REDIRECT_URI = "https://redirect.testsuite.gsi"
 SCOPES = ["openid", "urn:telematik:display_name", "urn:telematik:versicherter"]
 
@@ -92,15 +89,9 @@ DEBUG = True
 ALLOWED_HOSTS = ["*"]
 USE_TZ = True
 
-# Deliberately minimal: this process serves exactly two federation-facing GET endpoints
-# (entity_statement, idps) plus the downstream-OIDC endpoints this exercise never drives
-# through Django itself (the integration tests call gesundheitsid.oidc's PAR/token/id_token
-# functions directly against gsi-server, the same way tests/integration/test_local_federation.py
-# calls FederationMasterClient/resolve_trust_chain directly -- see that file's docstring).
-# None of `django_gesundheitsid`'s views touch the session, auth, or ORM, so none of
-# django.contrib's session/auth/staticfiles/contenttypes apps are needed here, unlike
-# tests/django/settings.py (which additionally mounts django.contrib.admin for its own
-# unrelated test coverage).
+# Deliberately minimal: this process serves only the two federation-facing GET endpoints, and none
+# of django_gesundheitsid's views touch the session, auth or ORM - so none of django.contrib's
+# apps are needed here, unlike tests/django/settings.py.
 INSTALLED_APPS = ["django_gesundheitsid"]
 
 MIDDLEWARE = []
