@@ -38,7 +38,9 @@ _DEFAULT_SCOPES = (
     "urn:telematik:versicherter",
     "urn:telematik:email",
 )
-_WIKI_URL = "https://wiki.gematik.de/spaces/IDPKB/pages/544316583/"
+# No trailing slash: with one, gematik's wiki returns 404. This URL is baked into the
+# disclaimer comment of every generated registration, so a reader hits the 404, not us.
+_WIKI_URL = "https://wiki.gematik.de/spaces/IDPKB/pages/544316583"
 
 # Element order matches RP_register.xsd's <xs:sequence> exactly, fetched while writing this
 # module -- getting this order wrong is exactly the kind of thing that would produce a
@@ -212,7 +214,9 @@ def add_subparser(subparsers: argparse._SubParsersAction) -> None:
     )
     parser.add_argument("--environment", required=True, choices=_ENVIRONMENTS)
     parser.add_argument("--issuer-uri", required=True, help="the Fachdienst-URI (entity statement issuer)")
-    parser.add_argument("--member-id", required=True)
+    # gematik ASSIGNS the Member-ID and tells you to submit the tag present but empty, so this
+    # cannot be required. Defaults to "" to produce exactly the <memberid /> they ask for.
+    parser.add_argument("--member-id", default="", help="leave unset: gematik assigns it on registration")
     parser.add_argument("--contact-email", required=True)
     parser.add_argument("--organization-name", default="")
     parser.add_argument("--fachdienst-name", default="")
