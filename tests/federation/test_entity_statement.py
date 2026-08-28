@@ -102,6 +102,7 @@ def test_build_entity_statement_top_level_metadata_has_federation_entity_org_and
     statement = verify_self_signed(token)
 
     assert statement.metadata["federation_entity"] == {
+        "name": "GesundheitsID Example",
         "organization_name": "Example GmbH",
         "contacts": ["support@example.com"],
     }
@@ -157,3 +158,17 @@ def test_verify_self_signed_rejects_a_statement_missing_required_claims() -> Non
 
     with pytest.raises(EntityStatementError):
         verify_self_signed(token)
+
+
+def test_build_entity_statement_publishes_the_two_fields_gematiks_registration_xsd_maps_to() -> None:
+    """RP_register.xsd annotates <organisationsname> as covering
+    metadata.openid_relying_party.organization_name, and <fachdienstname> as covering BOTH
+    metadata.openid_relying_party.client_name and metadata.federation_entity.name, which it
+    requires to be identical. Omitting either leaves a registration declaring values gematik
+    cannot find in the statement it fetches."""
+    statement = verify_self_signed(_build_token())
+    rp = statement.relying_party_metadata
+    federation_entity = statement.metadata["federation_entity"]
+
+    assert rp["organization_name"] == "Example GmbH"
+    assert federation_entity["name"] == rp["client_name"]

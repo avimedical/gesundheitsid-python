@@ -168,6 +168,10 @@ def build_entity_statement(
         "metadata": {
             "openid_relying_party": {
                 "client_name": client_name,
+                # gematik's RP_register.xsd annotates <organisationsname> as covering exactly this
+                # field, so a registration whose statement omits it declares a value gematik cannot
+                # find. OpenID Federation also defines organization_name on federation_entity below.
+                "organization_name": organization_name,
                 "redirect_uris": list(redirect_uris),
                 "response_types": ["code"],
                 "grant_types": ["authorization_code"],
@@ -181,6 +185,10 @@ def build_entity_statement(
                 "jwks": {"keys": [mtls_entry, idtoken_enc_key.as_dict(private=False)]},
             },
             "federation_entity": {
+                # <fachdienstname> covers openid_relying_party.client_name AND this, and the XSD
+                # says the two "muessen inhaltlich zueinander ident" - hence client_name, not a
+                # separate argument that could drift away from it.
+                "name": client_name,
                 "organization_name": organization_name,
                 "contacts": list(contacts),
             },
