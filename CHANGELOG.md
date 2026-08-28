@@ -7,6 +7,32 @@ this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-28
+
+Found by validating a generated registration against gematik's real `RP_register.xsd` and
+comparing it to the entity statement a deployed relying party actually serves.
+
+### Fixed
+
+- The entity statement now publishes `metadata.openid_relying_party.organization_name` and
+  `metadata.federation_entity.name`. gematik's `RP_register.xsd` annotates `<organisationsname>`
+  as covering the first, and `<fachdienstname>` as covering `openid_relying_party.client_name`
+  **and** `federation_entity.name` — which it requires to be identical. Both were absent, so a
+  registration declared two values gematik could not find in the statement it fetches.
+  `federation_entity.name` is set from `client_name` rather than a new argument, so the two
+  cannot drift apart. `federation_entity.organization_name` is unchanged: OpenID Federation 1.0
+  defines it there, and it is now published in both places.
+- `gesundheitsid-cli fedreg` no longer requires `--member-id`. gematik assigns the Member-ID on
+  registration and asks for the tag present but empty, so requiring it contradicted the process
+  it generates for.
+- `fedreg`'s wiki URL no longer carries a trailing slash, which made gematik's own wiki return
+  404. That URL is interpolated into the disclaimer comment of every generated registration, so
+  the broken link was served to whoever at gematik opened the file.
+
+### Changed
+
+- Comments throughout are capped at three lines. No behaviour changed.
+
 ## [0.2.0] - 2026-08-21
 
 First release informed by talking to gematik's real Federation Masters rather than only to a
